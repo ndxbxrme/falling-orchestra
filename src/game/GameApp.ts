@@ -208,7 +208,7 @@ export class GameApp {
     } else {
       this.playerX += this.input.horizontalAxis * GAME_CONFIG.playerSpeed * deltaTime;
     }
-    this.playerX = clamp(this.playerX, bounds.left + 3.2, bounds.right - 3.2);
+    this.playerX = this.world.clampPlayerX(this.playerX);
     this.world.setPlayerX(this.playerX);
 
     this.spawner.frozen = this.freezeSpawning;
@@ -256,6 +256,8 @@ export class GameApp {
 
     this.activeTouchPointerId = event.pointerId;
     this.touchPlayerTargetX = this.pointerEventToWorldX(event);
+    this.playerX = this.world.clampPlayerX(this.touchPlayerTargetX);
+    this.world.setPlayerX(this.playerX);
     this.canvas.setPointerCapture(event.pointerId);
     event.preventDefault();
   };

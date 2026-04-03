@@ -172,6 +172,7 @@ export class World {
   private backdropScrollDirection = new Vector2(0.78, -0.24);
   private backdropTargetScrollDirection = new Vector2(0.78, -0.24);
   private backdropScrollOffset = new Vector2(0, 0);
+  private playerWidth: number = GAME_CONFIG.playerWidth;
   private playerX = 0;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -205,6 +206,12 @@ export class World {
 
   getObjectCount(): number {
     return this.objects.length;
+  }
+
+  clampPlayerX(x: number): number {
+    const halfWidth = this.getResponsivePlayerWidth() * 0.5;
+    const sidePadding = Math.max(halfWidth + 0.7, 1.55);
+    return clamp(x, this.bounds.left + sidePadding, this.bounds.right - sidePadding);
   }
 
   render(): void {
@@ -283,8 +290,9 @@ export class World {
   }
 
   setPlayerX(x: number): void {
-    this.playerX = clamp(x, this.bounds.left + 3.2, this.bounds.right - 3.2);
-    const halfWidth = GAME_CONFIG.playerWidth * 0.5;
+    this.playerWidth = this.getResponsivePlayerWidth();
+    this.playerX = this.clampPlayerX(x);
+    const halfWidth = this.playerWidth * 0.5;
     const y = GAME_CONFIG.playerY;
 
     this.playerSurface.a = new Vector2(this.playerX - halfWidth, y);
@@ -606,11 +614,12 @@ export class World {
   }
 
   private createPlayerSurface(): Surface {
+    const halfWidth = this.getResponsivePlayerWidth() * 0.5;
     const surface: Surface = {
       id: "player-surface",
       kind: "player",
-      a: new Vector2(-GAME_CONFIG.playerWidth * 0.5, GAME_CONFIG.playerY),
-      b: new Vector2(GAME_CONFIG.playerWidth * 0.5, GAME_CONFIG.playerY),
+      a: new Vector2(-halfWidth, GAME_CONFIG.playerY),
+      b: new Vector2(halfWidth, GAME_CONFIG.playerY),
       bounce: GAME_CONFIG.playerBounce,
       musical: true,
       transpose: 0,
@@ -631,6 +640,12 @@ export class World {
     const rightWallX = this.bounds.right - 0.9;
     const wallTop = this.bounds.top - 0.9;
     const wallBottom = this.bounds.bottom + 0.9;
+    const arenaWidth = this.bounds.right - this.bounds.left;
+    const slopeInset = clamp(arenaWidth * 0.06, 0.42, 1.3);
+    const slopeLength = clamp(arenaWidth * 0.12, 0.95, 3.1);
+    const slopeRise = clamp(slopeLength * 0.24, 0.28, 0.82);
+    const slopeTopY = GAME_CONFIG.playerY - clamp(arenaWidth * 0.015 + 0.42, 0.48, 0.78);
+    const slopeBottomY = slopeTopY - slopeRise;
 
     const leftWall: Surface = {
       id: "left-wall",
@@ -659,8 +674,8 @@ export class World {
     const leftSlope: Surface = {
       id: "left-slope",
       kind: "slope",
-      a: new Vector2(this.bounds.left + 2.4, GAME_CONFIG.playerY - 1.35),
-      b: new Vector2(this.bounds.left + 6.1, GAME_CONFIG.playerY - 0.45),
+      a: new Vector2(leftWallX + slopeInset, slopeBottomY),
+      b: new Vector2(leftWallX + slopeInset + slopeLength, slopeTopY),
       bounce: GAME_CONFIG.slopeBounce,
       musical: true,
       transpose: 5,
@@ -671,8 +686,8 @@ export class World {
     const rightSlope: Surface = {
       id: "right-slope",
       kind: "slope",
-      a: new Vector2(this.bounds.right - 6.1, GAME_CONFIG.playerY - 0.45),
-      b: new Vector2(this.bounds.right - 2.4, GAME_CONFIG.playerY - 1.35),
+      a: new Vector2(rightWallX - slopeInset - slopeLength, slopeTopY),
+      b: new Vector2(rightWallX - slopeInset, slopeBottomY),
       bounce: GAME_CONFIG.slopeBounce,
       musical: true,
       transpose: 7,
@@ -989,6 +1004,11 @@ export class World {
   private getMegaPaletteColor(age: number): string {
     const paletteIndex = Math.floor(age * 18) % MEGA_COLORS.length;
     return MEGA_COLORS[(paletteIndex + MEGA_COLORS.length) % MEGA_COLORS.length];
+  }
+
+  private getResponsivePlayerWidth(): number {
+    const arenaWidth = this.bounds.right - this.bounds.left;
+    return clamp(arenaWidth * 0.2, 1.85, GAME_CONFIG.playerWidth);
   }
 
   private createFlatMaterial(name: string, color: string, alpha = 1): StandardMaterial {
