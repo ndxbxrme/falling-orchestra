@@ -36,7 +36,7 @@ export class GameApp {
   private paused = false;
   private muted = false;
   private liveMode = false;
-  private hudVisible = true;
+  private hudVisible = false;
   private freezeSpawning = false;
   private debugLabels = false;
   private grooveCharge = 0;
