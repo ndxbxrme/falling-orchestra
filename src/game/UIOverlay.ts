@@ -7,6 +7,7 @@ interface OverlayCallbacks {
   onModeChange: (value: ScaleModeName) => void;
   onSpawnIntervalChange: (value: number) => void;
   onPatternChange: (value: SpawnPattern) => void;
+  onHudToggle: () => void;
   onPauseToggle: () => void;
   onReset: () => void;
   onMuteToggle: () => void;
@@ -21,9 +22,9 @@ const ROOT_OPTIONS: RootNoteName[] = ["C", "C#", "D", "D#", "E", "F", "F#", "G",
 export class UIOverlay {
   private startCard!: HTMLDivElement;
   private hudTop!: HTMLDivElement;
+  private quickDock!: HTMLDivElement;
   private noteLayer!: HTMLDivElement;
   private objectCountValue!: HTMLElement;
-  private platformCountValue!: HTMLElement;
   private modeValue!: HTMLElement;
   private densityValue!: HTMLElement;
   private grooveValue!: HTMLElement;
@@ -38,8 +39,11 @@ export class UIOverlay {
   private patternSelect!: HTMLSelectElement;
   private volumeSlider!: HTMLInputElement;
   private volumeValue!: HTMLElement;
+  private hudButton!: HTMLButtonElement;
   private pauseButton!: HTMLButtonElement;
+  private quickPauseButton!: HTMLButtonElement;
   private muteButton!: HTMLButtonElement;
+  private quickMuteButton!: HTMLButtonElement;
   private liveToggle!: HTMLInputElement;
   private freezeToggle!: HTMLInputElement;
   private debugToggle!: HTMLInputElement;
@@ -50,7 +54,6 @@ export class UIOverlay {
 
   update(state: OverlayState): void {
     this.objectCountValue.textContent = String(state.activeObjects);
-    this.platformCountValue.textContent = String(state.activePlatforms);
     this.modeValue.textContent = `${state.rootNote} ${MODE_LABELS[state.mode]}`;
     this.densityValue.textContent = `${state.spawnPattern} / ${state.spawnLiveInterval.toFixed(2)}s`;
     this.grooveValue.textContent = `${state.grooveCharge} / ${state.grooveTarget}`;
@@ -87,11 +90,15 @@ export class UIOverlay {
 
     this.volumeValue.textContent = `${Math.round(state.masterVolume * 100)}%`;
     this.pauseButton.textContent = state.paused ? "Resume" : "Pause";
+    this.quickPauseButton.textContent = state.paused ? "Resume" : "Pause";
     this.muteButton.textContent = state.muted ? "Unmute" : "Mute";
+    this.quickMuteButton.textContent = state.muted ? "Unmute" : "Mute";
+    this.hudButton.textContent = state.hudVisible ? "Hide UI" : "Show UI";
     this.liveToggle.checked = state.liveMode;
     this.freezeToggle.checked = state.freezeSpawning;
     this.debugToggle.checked = state.debugLabels;
     this.hudTop.classList.toggle("hidden", !state.hudVisible);
+    this.quickDock.classList.toggle("hidden", !state.started);
     this.startCard.classList.toggle("hidden", state.started);
   }
 
@@ -131,20 +138,32 @@ export class UIOverlay {
 
     this.root.innerHTML = `
       <div class="hud-shell">
+        <div class="quick-dock hidden">
+          <button type="button" data-hud-button>Hide UI</button>
+          <button type="button" data-quick-pause>Pause</button>
+          <button type="button" data-quick-mute>Mute</button>
+        </div>
+
+        <div class="formation-strip floating hidden" data-formation-section>
+          <div class="formation-copy">
+            <strong>Special Catch</strong>
+            <span data-formation-value>0 / 0</span>
+          </div>
+          <div class="formation-bar">
+            <div class="formation-fill" data-formation-fill></div>
+          </div>
+        </div>
+
         <div class="hud-top">
           <section class="panel">
             <span class="eyebrow">Prototype Jam</span>
             <h1>Falling Orchestra</h1>
-            <p>Conduct the storm. Move the paddle, place temporary platforms, and keep the collisions singing inside the selected scale.</p>
+            <p>Conduct the storm. Move the paddle and keep the collisions singing inside the selected scale.</p>
 
             <div class="status-grid">
               <div class="status-card">
                 <strong data-object-count>0</strong>
                 <span>Active objects</span>
-              </div>
-              <div class="status-card">
-                <strong data-platform-count>0</strong>
-                <span>Live platforms</span>
               </div>
               <div class="status-card">
                 <strong data-mode-value>C Major / Ionian</strong>
@@ -161,16 +180,6 @@ export class UIOverlay {
               <div class="status-card">
                 <strong data-layer-value>Kick Only</strong>
                 <span>Groove layer</span>
-              </div>
-            </div>
-
-            <div class="formation-strip hidden" data-formation-section>
-              <div class="formation-copy">
-                <strong>Special Catch</strong>
-                <span data-formation-value>0 / 0</span>
-              </div>
-              <div class="formation-bar">
-                <div class="formation-fill" data-formation-fill></div>
               </div>
             </div>
 
@@ -226,11 +235,11 @@ export class UIOverlay {
             <h2>Controls</h2>
             <ul class="help-list">
               <li><strong>A / D</strong> or <strong>Left / Right</strong> to move the paddle. <strong>Up / Down</strong> changes the spawn center. In live mode, movement is arrow keys only.</li>
-              <li><strong>Click</strong> anywhere in the arena to drop a temporary platform.</li>
+              <li><strong>Touch</strong>: drag anywhere on the playfield to steer the paddle directly.</li>
+              <li><strong>Click</strong> or tap the arena to wake audio if it has not started yet.</li>
               <li><strong>L</strong> toggles live mode. Roots map to <strong>Q 2 W 3 E R 5 T 6 Y 7 U I</strong> and modes map to <strong>A S D F G H</strong>.</li>
               <li><strong>Esc</strong> hides or shows these panels. <strong>P</strong> pauses, <strong>M</strong> mutes, and <strong>Shift+R</strong> resets while live mode is on.</li>
-              <li>Catch most of a special formation with your paddle or temporary platforms to charge the groove meter and unlock new layers.</li>
-              <li>Platforms expire after a few seconds, so keep conducting.</li>
+              <li>Catch most of a special formation with your paddle to charge the groove meter and unlock new layers.</li>
             </ul>
 
             <h2>Families</h2>
@@ -248,7 +257,7 @@ export class UIOverlay {
           <div class="start-card" data-start-card>
             <span class="eyebrow">Audio Unlock</span>
             <h1>Start the Prototype</h1>
-            <p>Web Audio needs a gesture before it can play. Press the button below, then use <strong>A / D</strong> to slide the paddle and <strong>click</strong> to place up to three temporary platforms.</p>
+            <p>Web Audio needs a gesture before it can play. Press the button below, then use <strong>A / D</strong> or drag across the playfield to shape the falling lines.</p>
             <p>Best first move: switch the mode if you want a different mood, then let the rain build until the arena starts to answer back.</p>
             <div class="button-row">
               <button type="button" data-start-button>Wake Audio and Play</button>
@@ -258,11 +267,11 @@ export class UIOverlay {
       </div>
     `;
 
+    this.quickDock = this.query<HTMLDivElement>(".quick-dock");
     this.hudTop = this.query<HTMLDivElement>(".hud-top");
     this.startCard = this.query<HTMLDivElement>("[data-start-card]");
     this.noteLayer = this.query<HTMLDivElement>("[data-note-layer]");
     this.objectCountValue = this.query("[data-object-count]");
-    this.platformCountValue = this.query("[data-platform-count]");
     this.modeValue = this.query("[data-mode-value]");
     this.densityValue = this.query("[data-density-value]");
     this.grooveValue = this.query("[data-groove-value]");
@@ -277,8 +286,11 @@ export class UIOverlay {
     this.patternSelect = this.query<HTMLSelectElement>("[data-pattern-select]");
     this.volumeSlider = this.query<HTMLInputElement>("[data-volume-slider]");
     this.volumeValue = this.query("[data-volume-value]");
+    this.hudButton = this.query<HTMLButtonElement>("[data-hud-button]");
     this.pauseButton = this.query<HTMLButtonElement>("[data-pause-button]");
+    this.quickPauseButton = this.query<HTMLButtonElement>("[data-quick-pause]");
     this.muteButton = this.query<HTMLButtonElement>("[data-mute-button]");
+    this.quickMuteButton = this.query<HTMLButtonElement>("[data-quick-mute]");
     this.liveToggle = this.query<HTMLInputElement>("[data-live-toggle]");
     this.freezeToggle = this.query<HTMLInputElement>("[data-freeze-toggle]");
     this.debugToggle = this.query<HTMLInputElement>("[data-debug-toggle]");
@@ -311,11 +323,23 @@ export class UIOverlay {
       this.callbacks.onPauseToggle();
     });
 
+    this.hudButton.addEventListener("click", () => {
+      this.callbacks.onHudToggle();
+    });
+
+    this.quickPauseButton.addEventListener("click", () => {
+      this.callbacks.onPauseToggle();
+    });
+
     this.query<HTMLButtonElement>("[data-reset-button]").addEventListener("click", () => {
       this.callbacks.onReset();
     });
 
     this.muteButton.addEventListener("click", () => {
+      this.callbacks.onMuteToggle();
+    });
+
+    this.quickMuteButton.addEventListener("click", () => {
       this.callbacks.onMuteToggle();
     });
 

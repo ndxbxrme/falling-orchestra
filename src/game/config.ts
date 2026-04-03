@@ -57,9 +57,6 @@ export const GAME_CONFIG = {
   objectCollisionThreshold: 4.8,
   surfaceCollisionThreshold: 3.6,
   maxDeltaTime: 1 / 30,
-  platformLifetime: 7.2,
-  maxPlatforms: 3,
-  platformLength: 3.4,
   spawnIntervalDefault: 0.74,
   spawnIntervalMin: 0,
   spawnIntervalMax: 3,
@@ -69,7 +66,6 @@ export const GAME_CONFIG = {
   wallBounce: 0.86,
   slopeBounce: 0.94,
   playerBounce: 0.96,
-  platformBounce: 0.98,
 } as const;
 
 export interface ObjectDefinition {

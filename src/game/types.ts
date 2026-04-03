@@ -3,7 +3,7 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 
 export type ObjectType = "bell" | "bass" | "spark" | "mega";
 export type InstrumentFamily = "bell" | "bass" | "spark" | "mega";
-export type SurfaceKind = "floor" | "wall" | "slope" | "player" | "temporary";
+export type SurfaceKind = "floor" | "wall" | "slope" | "player";
 export type SpawnPattern = "rain" | "lanes" | "swing";
 export type ScaleModeName =
   | "ionian"
@@ -70,15 +70,6 @@ export interface Surface {
   mesh?: Mesh;
 }
 
-export interface TemporaryPlatform {
-  id: string;
-  x: number;
-  y: number;
-  length: number;
-  ttl: number;
-  transpose: number;
-}
-
 export interface WorldImpact {
   x: number;
   y: number;
@@ -94,7 +85,6 @@ export interface PlayedNote {
 export interface OverlayState {
   started: boolean;
   activeObjects: number;
-  activePlatforms: number;
   rootNote: RootNoteName;
   mode: ScaleModeName;
   liveMode: boolean;

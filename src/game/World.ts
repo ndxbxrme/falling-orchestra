@@ -9,7 +9,7 @@ import { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { GAME_CONFIG, OBJECT_DEFINITIONS } from "./config";
-import type { ArenaBounds, MusicalObject, ObjectType, Surface, TemporaryPlatform } from "./types";
+import type { ArenaBounds, MusicalObject, ObjectType, Surface } from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -157,7 +157,6 @@ export class World {
   };
   private objects: MusicalObject[] = [];
   private baseSurfaces: Surface[] = [];
-  private temporarySurfaces = new Map<string, Surface>();
   private pulses: PulseEffect[] = [];
   private nextObjectId = 0;
   private objectMaterials = new Map<ObjectType, { outer: StandardMaterial; inner: StandardMaterial }>();
@@ -252,20 +251,6 @@ export class World {
 
     this.rebuildBaseSurfaces();
     this.setPlayerX(this.playerX);
-    this.syncTemporaryPlatforms(
-      Array.from(this.temporarySurfaces.values()).map((surface) => {
-        const center = surface.a.add(surface.b).scale(0.5);
-
-        return {
-          id: surface.id,
-          x: center.x,
-          y: center.y,
-          length: Vector2.Distance(surface.a, surface.b),
-          ttl: surface.ttl ?? GAME_CONFIG.platformLifetime,
-          transpose: surface.transpose,
-        };
-      }),
-    );
   }
 
   dispose(): void {
@@ -280,7 +265,6 @@ export class World {
 
     this.playerMesh.dispose();
     this.playerSurface.mesh?.dispose();
-    this.temporarySurfaces.forEach((surface) => surface.mesh?.dispose());
     this.pulses.forEach((pulse) => pulse.mesh.dispose());
     this.scene.dispose();
     this.engine.dispose();
@@ -294,8 +278,6 @@ export class World {
 
     this.objects = [];
     this.nextObjectId = 0;
-    this.temporarySurfaces.forEach((surface) => surface.mesh?.dispose());
-    this.temporarySurfaces.clear();
     this.pulses.forEach((pulse) => pulse.mesh.dispose());
     this.pulses = [];
   }
@@ -325,51 +307,6 @@ export class World {
     }
 
     this.backdropTargetScrollDirection = direction.scale(1 / length);
-  }
-
-  syncTemporaryPlatforms(platforms: TemporaryPlatform[]): void {
-    const incomingIds = new Set(platforms.map((platform) => platform.id));
-
-    this.temporarySurfaces.forEach((surface, id) => {
-      if (!incomingIds.has(id)) {
-        surface.mesh?.dispose();
-        this.temporarySurfaces.delete(id);
-      }
-    });
-
-    for (const platform of platforms) {
-      const halfLength = platform.length * 0.5;
-      const a = new Vector2(platform.x - halfLength, platform.y);
-      const b = new Vector2(platform.x + halfLength, platform.y);
-      const existing = this.temporarySurfaces.get(platform.id);
-
-      if (existing) {
-        existing.a = a;
-        existing.b = b;
-        existing.ttl = platform.ttl;
-        existing.transpose = platform.transpose;
-        this.updateSurfaceMesh(existing, 0.28);
-        this.updateTemporaryMaterial(existing);
-        continue;
-      }
-
-      const surface: Surface = {
-        id: platform.id,
-        kind: "temporary",
-        a,
-        b,
-        bounce: GAME_CONFIG.platformBounce,
-        musical: true,
-        transpose: platform.transpose,
-        color: "#7bf3d7",
-        ttl: platform.ttl,
-        mesh: this.createSurfaceMesh(platform.id, "#7bf3d7"),
-      };
-
-      this.updateSurfaceMesh(surface, 0.28);
-      this.updateTemporaryMaterial(surface);
-      this.temporarySurfaces.set(platform.id, surface);
-    }
   }
 
   spawnObject(
@@ -480,7 +417,7 @@ export class World {
     ) => void,
     onObjectRemoved?: (object: MusicalObject) => void,
   ): void {
-    const surfaces = [...this.baseSurfaces, this.playerSurface, ...this.temporarySurfaces.values()];
+    const surfaces = [...this.baseSurfaces, this.playerSurface];
     const substeps = Math.max(1, Math.min(5, Math.ceil(deltaTime / (1 / 120))));
     const stepDeltaTime = deltaTime / substeps;
 
@@ -988,18 +925,6 @@ export class World {
     mesh.position.set(midpoint.x, midpoint.y, 0.2);
     mesh.scaling.set(length, thickness, 1);
     mesh.rotation.z = Math.atan2(delta.y, delta.x);
-  }
-
-  private updateTemporaryMaterial(surface: Surface): void {
-    const material = surface.mesh?.material;
-
-    if (!(material instanceof StandardMaterial)) {
-      return;
-    }
-
-    const ttlRatio = clamp((surface.ttl ?? 0) / GAME_CONFIG.platformLifetime, 0, 1);
-    material.alpha = 0.35 + ttlRatio * 0.5;
-    surface.mesh!.scaling.y = 0.28 * (0.85 + ttlRatio * 0.25);
   }
 
   private createPulse(x: number, y: number, color: string, impact: number): void {

@@ -2,7 +2,6 @@ import { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import { GAME_CONFIG } from "./config";
 import { InputController } from "./InputController";
 import { MusicSystem } from "./MusicSystem";
-import { PlatformTool } from "./PlatformTool";
 import { Spawner } from "./Spawner";
 import { UIOverlay } from "./UIOverlay";
 import { World } from "./World";
@@ -30,7 +29,6 @@ export class GameApp {
   private world: World;
   private music = new MusicSystem();
   private spawner = new Spawner();
-  private platformTool = new PlatformTool();
   private input: InputController;
   private overlay: UIOverlay;
   private playerX = 0;
@@ -49,6 +47,8 @@ export class GameApp {
   private lastBackdropBarIndex = -1;
   private lastFrameTime = performance.now();
   private megaComboCooldown = 0;
+  private activeTouchPointerId: number | null = null;
+  private touchPlayerTargetX: number | null = null;
 
   constructor(private canvas: HTMLCanvasElement, overlayRoot: HTMLDivElement) {
     this.world = new World(canvas);
@@ -127,6 +127,9 @@ export class GameApp {
       onPatternChange: (value: SpawnPattern) => {
         this.spawner.spawnPattern = value;
       },
+      onHudToggle: () => {
+        this.toggleHud();
+      },
       onPauseToggle: () => {
         this.togglePause();
       },
@@ -152,6 +155,9 @@ export class GameApp {
     });
 
     this.canvas.addEventListener("pointerdown", this.handleCanvasPointerDown);
+    this.canvas.addEventListener("pointermove", this.handleCanvasPointerMove);
+    this.canvas.addEventListener("pointerup", this.handleCanvasPointerUp);
+    this.canvas.addEventListener("pointercancel", this.handleCanvasPointerUp);
     window.addEventListener("resize", this.handleResize);
   }
 
@@ -172,6 +178,9 @@ export class GameApp {
 
   dispose(): void {
     this.canvas.removeEventListener("pointerdown", this.handleCanvasPointerDown);
+    this.canvas.removeEventListener("pointermove", this.handleCanvasPointerMove);
+    this.canvas.removeEventListener("pointerup", this.handleCanvasPointerUp);
+    this.canvas.removeEventListener("pointercancel", this.handleCanvasPointerUp);
     window.removeEventListener("resize", this.handleResize);
     this.input.dispose();
     this.music.dispose();
@@ -193,15 +202,14 @@ export class GameApp {
     this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
 
     const bounds = this.world.getBounds();
-    this.playerX = clamp(
-      this.playerX + this.input.horizontalAxis * GAME_CONFIG.playerSpeed * deltaTime,
-      bounds.left + 3.2,
-      bounds.right - 3.2,
-    );
+    if (this.touchPlayerTargetX !== null) {
+      const follow = Math.min(1, deltaTime * 20);
+      this.playerX += (this.touchPlayerTargetX - this.playerX) * follow;
+    } else {
+      this.playerX += this.input.horizontalAxis * GAME_CONFIG.playerSpeed * deltaTime;
+    }
+    this.playerX = clamp(this.playerX, bounds.left + 3.2, bounds.right - 3.2);
     this.world.setPlayerX(this.playerX);
-
-    this.platformTool.update(deltaTime);
-    this.world.syncTemporaryPlatforms(this.platformTool.getPlatforms());
 
     this.spawner.frozen = this.freezeSpawning;
     const requests = this.spawner.update(deltaTime, bounds, this.world.getObjectCount());
@@ -242,20 +250,52 @@ export class GameApp {
   private handleCanvasPointerDown = (event: PointerEvent): void => {
     void this.unlockAudio();
 
-    const rect = this.canvas.getBoundingClientRect();
-    const bounds = this.world.getBounds();
-    const x =
-      bounds.left + ((event.clientX - rect.left) / rect.width) * (bounds.right - bounds.left);
-    const y =
-      bounds.top - ((event.clientY - rect.top) / rect.height) * (bounds.top - bounds.bottom);
+    if (!this.isDirectTouchPointer(event)) {
+      return;
+    }
 
-    this.platformTool.place(x, y, bounds);
-    this.world.syncTemporaryPlatforms(this.platformTool.getPlatforms());
+    this.activeTouchPointerId = event.pointerId;
+    this.touchPlayerTargetX = this.pointerEventToWorldX(event);
+    this.canvas.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  private handleCanvasPointerMove = (event: PointerEvent): void => {
+    if (event.pointerId !== this.activeTouchPointerId || !this.isDirectTouchPointer(event)) {
+      return;
+    }
+
+    this.touchPlayerTargetX = this.pointerEventToWorldX(event);
+    event.preventDefault();
+  };
+
+  private handleCanvasPointerUp = (event: PointerEvent): void => {
+    if (event.pointerId !== this.activeTouchPointerId) {
+      return;
+    }
+
+    this.touchPlayerTargetX = null;
+    this.activeTouchPointerId = null;
+
+    if (this.canvas.hasPointerCapture(event.pointerId)) {
+      this.canvas.releasePointerCapture(event.pointerId);
+    }
   };
 
   private handleResize = (): void => {
     this.world.resize();
   };
+
+  private isDirectTouchPointer(event: PointerEvent): boolean {
+    return event.pointerType === "touch" || event.pointerType === "pen";
+  }
+
+  private pointerEventToWorldX(event: PointerEvent): number {
+    const rect = this.canvas.getBoundingClientRect();
+    const bounds = this.world.getBounds();
+    const normalizedX = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    return bounds.left + normalizedX * (bounds.right - bounds.left);
+  }
 
   private handleMusicalImpact(
     object: MusicalObject,
@@ -277,7 +317,7 @@ export class GameApp {
       color: object.color,
     });
 
-    if (object.specialFormationId && (surface.kind === "player" || surface.kind === "temporary")) {
+    if (object.specialFormationId && surface.kind === "player") {
       this.markSpecialObjectCaught(object.specialFormationId, object.id);
     }
 
@@ -365,7 +405,6 @@ export class GameApp {
   }
 
   private reset(): void {
-    this.platformTool.reset();
     this.spawner.reset();
     this.world.reset();
     this.world.setPlayerX(this.playerX = 0);
@@ -496,7 +535,6 @@ export class GameApp {
     return {
       started: this.started,
       activeObjects: this.world.getObjectCount(),
-      activePlatforms: this.platformTool.getPlatforms().length,
       rootNote: this.music.rootNote,
       mode: this.music.mode,
       liveMode: this.liveMode,
