@@ -16,6 +16,21 @@ npm run build
 npm run preview
 ```
 
+## GitHub Pages
+
+GitHub Pages deploys are wired through GitHub Actions in [`.github/workflows/pages.yml`](./.github/workflows/pages.yml).
+
+- In the repo settings, go to `Pages` and set `Source` to `GitHub Actions`.
+- There is no Pages directory to choose when using this setup.
+- Pushing a tag like `v0.1.0` will build the app, copy `dist/index.html` to `dist/404.html`, and deploy the `dist` artifact.
+
+Example:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Controls
 
 - `A / D` or `Left / Right`: move the conductor paddle

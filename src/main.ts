@@ -1,4 +1,6 @@
 import "./style.css";
+import "@babylonjs/core/Shaders/default.vertex.js";
+import "@babylonjs/core/Shaders/default.fragment.js";
 import { GameApp } from "./game/GameApp";
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");

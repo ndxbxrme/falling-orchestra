@@ -123,6 +123,15 @@ export class MusicSystem {
     color: string;
   }): PlayedNote {
     const when = this.getNextSixteenthTime();
+
+    if (options.family === "mega") {
+      this.playMegaVoice(clamp(options.impact, 0, 18), clamp(options.pan, -0.9, 0.9), when);
+      return {
+        label: "MEGA",
+        color: options.color,
+      };
+    }
+
     const harmony =
       this.harmonyControlMode === "cycle"
         ? this.getHarmonyForTime(when)
@@ -151,6 +160,11 @@ export class MusicSystem {
       label: midiToLabel(quantized),
       color: options.color,
     };
+  }
+
+  triggerMegaCombo(options: { impact: number; pan: number }): void {
+    const when = this.getNextSixteenthTime();
+    this.playMegaComboVoice(clamp(options.impact, 0, 20), clamp(options.pan, -0.9, 0.9), when);
   }
 
   dispose(): void {
@@ -228,6 +242,27 @@ export class MusicSystem {
     }
 
     return Math.floor(elapsed / quarterDuration);
+  }
+
+  getBeatPulse(): number {
+    if (!this.audioContext || this.transportStartTime === undefined) {
+      return 0;
+    }
+
+    const quarterDuration = 60 / this.bpm;
+    const elapsed = this.audioContext.currentTime - this.transportStartTime;
+
+    if (elapsed <= 0) {
+      return 0;
+    }
+
+    const phase = (elapsed / quarterDuration) % 1;
+    const quarterIndex = Math.floor(elapsed / quarterDuration);
+    const accent = quarterIndex % 4 === 0 ? 1 : 0.78;
+    const basePulse = Math.exp(-phase * 7.6);
+    const tail = Math.max(0, 1 - phase * 1.8);
+
+    return clamp(basePulse * tail * accent, 0, 1);
   }
 
   private syncMasterVolume(): void {
@@ -565,6 +600,205 @@ export class MusicSystem {
     fifth.stop(endTime + 0.04);
     air.stop(endTime + 0.04);
     lfo.stop(endTime + 0.04);
+  }
+
+  private playMegaVoice(impact: number, pan: number, when: number): void {
+    if (!this.audioContext || !this.masterGain) {
+      return;
+    }
+
+    const ctx = this.audioContext;
+    const output = ctx.createGain();
+    const panNode = ctx.createStereoPanner();
+    const variant = Math.floor(Math.random() * 3);
+    const energy = 0.42 + clamp(impact / 18, 0, 1) * 0.48;
+
+    output.connect(panNode);
+    panNode.connect(this.masterGain);
+    panNode.pan.setValueAtTime(pan, when);
+    output.gain.setValueAtTime(0.88, when);
+
+    if (variant === 0) {
+      const noise = ctx.createBufferSource();
+      const noiseFilter = ctx.createBiquadFilter();
+      const noiseGain = ctx.createGain();
+      const body = ctx.createOscillator();
+      const bodyGain = ctx.createGain();
+
+      noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
+      noiseFilter.type = "bandpass";
+      noiseFilter.frequency.setValueAtTime(1240, when);
+      noiseFilter.Q.value = 1.1;
+      noiseGain.gain.setValueAtTime(0.0001, when);
+      noiseGain.gain.linearRampToValueAtTime(0.18 * energy, when + 0.004);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.24);
+
+      body.type = "sawtooth";
+      body.frequency.setValueAtTime(290, when);
+      body.frequency.exponentialRampToValueAtTime(92, when + 0.2);
+      bodyGain.gain.setValueAtTime(0.0001, when);
+      bodyGain.gain.linearRampToValueAtTime(0.22 * energy, when + 0.006);
+      bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.28);
+
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(output);
+      body.connect(bodyGain);
+      bodyGain.connect(output);
+
+      noise.start(when);
+      noise.stop(when + 0.25);
+      body.start(when);
+      body.stop(when + 0.3);
+      return;
+    }
+
+    if (variant === 1) {
+      const shimmer = ctx.createOscillator();
+      const shimmerGain = ctx.createGain();
+      const noise = ctx.createBufferSource();
+      const noiseFilter = ctx.createBiquadFilter();
+      const noiseGain = ctx.createGain();
+
+      shimmer.type = "triangle";
+      shimmer.frequency.setValueAtTime(620, when);
+      shimmer.frequency.exponentialRampToValueAtTime(210, when + 0.12);
+      shimmerGain.gain.setValueAtTime(0.0001, when);
+      shimmerGain.gain.linearRampToValueAtTime(0.18 * energy, when + 0.002);
+      shimmerGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
+
+      noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
+      noiseFilter.type = "highpass";
+      noiseFilter.frequency.setValueAtTime(1800, when);
+      noiseGain.gain.setValueAtTime(0.0001, when);
+      noiseGain.gain.linearRampToValueAtTime(0.14 * energy, when + 0.002);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.12);
+
+      shimmer.connect(shimmerGain);
+      shimmerGain.connect(output);
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(output);
+
+      shimmer.start(when);
+      shimmer.stop(when + 0.2);
+      noise.start(when);
+      noise.stop(when + 0.14);
+      return;
+    }
+
+    const body = ctx.createOscillator();
+    const sub = ctx.createOscillator();
+    const bodyGain = ctx.createGain();
+    const subGain = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(920, when);
+    filter.frequency.exponentialRampToValueAtTime(420, when + 0.22);
+    filter.Q.value = 1.4;
+
+    body.type = "square";
+    body.frequency.setValueAtTime(184, when);
+    body.frequency.exponentialRampToValueAtTime(74, when + 0.18);
+    bodyGain.gain.setValueAtTime(0.0001, when);
+    bodyGain.gain.linearRampToValueAtTime(0.2 * energy, when + 0.005);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.26);
+
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(62, when);
+    subGain.gain.setValueAtTime(0.0001, when);
+    subGain.gain.linearRampToValueAtTime(0.16 * energy, when + 0.008);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.3);
+
+    body.connect(bodyGain);
+    bodyGain.connect(filter);
+    sub.connect(subGain);
+    subGain.connect(filter);
+    filter.connect(output);
+
+    body.start(when);
+    body.stop(when + 0.28);
+    sub.start(when);
+    sub.stop(when + 0.32);
+  }
+
+  private playMegaComboVoice(impact: number, pan: number, when: number): void {
+    if (!this.audioContext || !this.masterGain) {
+      return;
+    }
+
+    const ctx = this.audioContext;
+    const output = ctx.createGain();
+    const panNode = ctx.createStereoPanner();
+    const noise = ctx.createBufferSource();
+    const noiseFilter = ctx.createBiquadFilter();
+    const noiseGain = ctx.createGain();
+    const sub = ctx.createOscillator();
+    const subGain = ctx.createGain();
+    const bodyA = ctx.createOscillator();
+    const bodyB = ctx.createOscillator();
+    const bodyGain = ctx.createGain();
+    const toneFilter = ctx.createBiquadFilter();
+    const energy = 0.55 + clamp(impact / 20, 0, 1) * 0.55;
+
+    output.connect(panNode);
+    panNode.connect(this.masterGain);
+    panNode.pan.setValueAtTime(pan * 0.65, when);
+    output.gain.setValueAtTime(1.05, when);
+
+    noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
+    noiseFilter.type = "bandpass";
+    noiseFilter.frequency.setValueAtTime(1680, when);
+    noiseFilter.frequency.exponentialRampToValueAtTime(740, when + 0.24);
+    noiseFilter.Q.value = 1.2;
+    noiseGain.gain.setValueAtTime(0.0001, when);
+    noiseGain.gain.linearRampToValueAtTime(0.22 * energy, when + 0.004);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.26);
+
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(92, when);
+    sub.frequency.exponentialRampToValueAtTime(39, when + 0.42);
+    subGain.gain.setValueAtTime(0.0001, when);
+    subGain.gain.linearRampToValueAtTime(0.24 * energy, when + 0.01);
+    subGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.5);
+
+    bodyA.type = "sawtooth";
+    bodyA.frequency.setValueAtTime(440, when);
+    bodyA.frequency.exponentialRampToValueAtTime(176, when + 0.22);
+    bodyB.type = "triangle";
+    bodyB.frequency.setValueAtTime(660, when);
+    bodyB.frequency.exponentialRampToValueAtTime(248, when + 0.18);
+
+    bodyGain.gain.setValueAtTime(0.0001, when);
+    bodyGain.gain.linearRampToValueAtTime(0.16 * energy, when + 0.006);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.3);
+
+    toneFilter.type = "lowpass";
+    toneFilter.frequency.setValueAtTime(2200, when);
+    toneFilter.frequency.exponentialRampToValueAtTime(620, when + 0.28);
+    toneFilter.Q.value = 1.05;
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(output);
+
+    sub.connect(subGain);
+    subGain.connect(output);
+
+    bodyA.connect(bodyGain);
+    bodyB.connect(bodyGain);
+    bodyGain.connect(toneFilter);
+    toneFilter.connect(output);
+
+    noise.start(when);
+    noise.stop(when + 0.28);
+    sub.start(when);
+    sub.stop(when + 0.52);
+    bodyA.start(when);
+    bodyA.stop(when + 0.32);
+    bodyB.start(when);
+    bodyB.stop(when + 0.28);
   }
 
   private playBellVoice(

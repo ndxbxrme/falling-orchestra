@@ -1,8 +1,8 @@
 import type { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 
-export type ObjectType = "bell" | "bass" | "spark";
-export type InstrumentFamily = "bell" | "bass" | "spark";
+export type ObjectType = "bell" | "bass" | "spark" | "mega";
+export type InstrumentFamily = "bell" | "bass" | "spark" | "mega";
 export type SurfaceKind = "floor" | "wall" | "slope" | "player" | "temporary";
 export type SpawnPattern = "rain" | "lanes" | "swing";
 export type ScaleModeName =
@@ -49,7 +49,10 @@ export interface MusicalObject {
   glowColor: string;
   noteRange: [number, number];
   cooldown: number;
+  gravityScale: number;
   pulse: number;
+  age: number;
+  trailTimer: number;
   mesh: Mesh;
   coreMesh: Mesh;
 }

@@ -82,6 +82,7 @@ export interface ObjectDefinition {
   glowColor: string;
   noteRange: [number, number];
   cooldown: number;
+  gravityScale: number;
 }
 
 export const OBJECT_DEFINITIONS: Record<ObjectType, ObjectDefinition> = {
@@ -95,6 +96,7 @@ export const OBJECT_DEFINITIONS: Record<ObjectType, ObjectDefinition> = {
     glowColor: "#fff0a6",
     noteRange: [72, 93],
     cooldown: 0.15,
+    gravityScale: 1,
   },
   bass: {
     type: "bass",
@@ -106,6 +108,7 @@ export const OBJECT_DEFINITIONS: Record<ObjectType, ObjectDefinition> = {
     glowColor: "#ffb3a7",
     noteRange: [38, 62],
     cooldown: 0.22,
+    gravityScale: 1,
   },
   spark: {
     type: "spark",
@@ -117,5 +120,18 @@ export const OBJECT_DEFINITIONS: Record<ObjectType, ObjectDefinition> = {
     glowColor: "#d6fdff",
     noteRange: [79, 103],
     cooldown: 0.09,
+    gravityScale: 1,
+  },
+  mega: {
+    type: "mega",
+    noteFamily: "mega",
+    radius: 0.72,
+    bounce: 1.14,
+    mass: 1.6,
+    color: "#fff178",
+    glowColor: "#ffffff",
+    noteRange: [56, 82],
+    cooldown: 0.3,
+    gravityScale: 0.34,
   },
 };

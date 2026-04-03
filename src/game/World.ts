@@ -7,6 +7,7 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
+import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { GAME_CONFIG, OBJECT_DEFINITIONS } from "./config";
 import type { ArenaBounds, MusicalObject, ObjectType, Surface, TemporaryPlatform } from "./types";
 
@@ -42,7 +43,105 @@ interface PulseEffect {
   material: StandardMaterial;
   age: number;
   lifetime: number;
+  startScale: number;
+  endScale: number;
+  startAlpha: number;
+  endAlpha: number;
 }
+
+const MEGA_COLORS = [
+  "#000000",
+  "#0000D7",
+  "#D70000",
+  "#D700D7",
+  "#00D700",
+  "#00D7D7",
+  "#D7D700",
+  "#D7D7D7",
+  "#000000",
+  "#0000FF",
+  "#FF0000",
+  "#FF00FF",
+  "#00FF00",
+  "#00FFFF",
+  "#FFFF00",
+  "#FFFFFF",
+];
+
+const BACKDROP_VERTEX_SHADER = `
+precision highp float;
+
+attribute vec3 position;
+attribute vec2 uv;
+uniform mat4 worldViewProjection;
+
+varying vec2 vUV;
+
+void main(void) {
+  vUV = uv;
+  gl_Position = worldViewProjection * vec4(position, 1.0);
+}
+`;
+
+const BACKDROP_FRAGMENT_SHADER = `
+precision highp float;
+
+varying vec2 vUV;
+
+uniform float iTime;
+uniform float beatPulse;
+uniform float grooveIntensity;
+uniform vec2 resolution;
+uniform vec2 scrollDirection;
+uniform vec2 scrollOffset;
+
+mat2 rot(float angle) {
+  float s = sin(angle);
+  float c = cos(angle);
+  return mat2(c, -s, s, c);
+}
+
+float waveField(vec2 p, float time) {
+  float layerA = sin(p.x * 2.0 + time * 0.22);
+  float layerB = sin(p.y * 3.3 - time * 0.18 + layerA * 0.9);
+  float layerC = sin((p.x + p.y) * 2.6 + time * 0.12 + layerB * 0.8);
+  float layerD = sin(length(p * vec2(1.1, 0.8)) * 4.2 - time * 0.16);
+  return layerA * 0.28 + layerB * 0.26 + layerC * 0.24 + layerD * 0.22;
+}
+
+void main(void) {
+  vec2 uv = vUV * 2.0 - 1.0;
+  uv.x *= resolution.x / max(resolution.y, 1.0);
+  vec2 normalizedDirection = normalize(scrollDirection + vec2(0.0001, 0.0001));
+  float pulseWarp = beatPulse * (0.012 + grooveIntensity * 0.012);
+  vec2 flowUv = uv + scrollOffset * 2.6;
+  flowUv += vec2(-normalizedDirection.y, normalizedDirection.x) * sin(iTime * 0.18) * 0.06;
+  flowUv += normalize(uv + vec2(0.0001, 0.0001)) * pulseWarp;
+  vec2 detailUv = rot(0.75) * flowUv * 1.35;
+  vec2 wideUv = rot(-0.45) * flowUv * 0.72;
+
+  float radial = length(uv);
+  float flow = waveField(wideUv, iTime) * 0.65 + waveField(detailUv, iTime + 12.0) * 0.35;
+  float bloom = smoothstep(1.35, 0.08, radial);
+  float centerGlow = smoothstep(0.95, 0.0, radial) * beatPulse;
+  float pulseRipple = (1.0 - smoothstep(0.18, 0.95, radial)) * beatPulse;
+  float pulseAmount = beatPulse * (0.18 + grooveIntensity * 0.22);
+  float softBands = smoothstep(-0.55, 0.75, flow);
+  float mist = smoothstep(-0.15, 0.95, flow + 0.18);
+
+  vec3 base = vec3(0.03, 0.09, 0.14);
+  vec3 tide = vec3(0.06, 0.25, 0.34) * (0.14 + softBands * 0.3) * (0.75 + grooveIntensity * 0.42);
+  vec3 mistGlow = vec3(0.10, 0.34, 0.36) * mist * (0.18 + grooveIntensity * 0.1);
+  vec3 glow = vec3(0.98, 0.81, 0.44) * centerGlow * (0.04 + pulseAmount * 0.85);
+  vec3 ripple = vec3(0.42, 0.88, 0.84) * pulseRipple * (0.02 + pulseAmount * 0.4);
+  vec3 center = vec3(0.10, 0.45, 0.48) * bloom * (0.1 + grooveIntensity * 0.1 + beatPulse * 0.08);
+
+  vec3 color = base + tide * bloom + mistGlow * bloom + center + glow + ripple;
+  color *= 1.0 - smoothstep(0.75, 1.38, radial) * 0.65;
+
+  gl_FragColor = vec4(color, 1.0);
+}
+`;
 
 export class World {
   readonly engine: Engine;
@@ -66,6 +165,14 @@ export class World {
   private playerCoreMaterial: StandardMaterial;
   private playerMesh: Mesh;
   private playerSurface: Surface;
+  private backdropPlane?: Mesh;
+  private backdropMaterial?: ShaderMaterial;
+  private backdropTime = 0;
+  private backdropBeatPulse = 0;
+  private backdropGrooveIntensity = 0;
+  private backdropScrollDirection = new Vector2(0.78, -0.24);
+  private backdropTargetScrollDirection = new Vector2(0.78, -0.24);
+  private backdropScrollOffset = new Vector2(0, 0);
   private playerX = 0;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -102,6 +209,24 @@ export class World {
   }
 
   render(): void {
+    if (this.backdropMaterial) {
+      const deltaSeconds = this.engine.getDeltaTime() * 0.001;
+      const smoothing = Math.min(1, deltaSeconds * 2.2);
+      const scrollSpeed = 0.045 + this.backdropGrooveIntensity * 0.035;
+      this.backdropTime += deltaSeconds;
+      this.backdropScrollDirection = this.backdropScrollDirection.scale(1 - smoothing).add(
+        this.backdropTargetScrollDirection.scale(smoothing),
+      );
+      this.backdropScrollOffset.addInPlace(
+        this.backdropScrollDirection.scale(deltaSeconds * scrollSpeed),
+      );
+      this.backdropMaterial.setFloat("iTime", this.backdropTime);
+      this.backdropMaterial.setFloat("beatPulse", this.backdropBeatPulse);
+      this.backdropMaterial.setFloat("grooveIntensity", this.backdropGrooveIntensity);
+      this.backdropMaterial.setVector2("scrollDirection", this.backdropScrollDirection);
+      this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
+    }
+
     this.scene.render();
   }
 
@@ -122,10 +247,8 @@ export class World {
       floorY: -halfHeight + 1.4,
     };
 
-    this.camera.orthoLeft = this.bounds.left;
-    this.camera.orthoRight = this.bounds.right;
-    this.camera.orthoTop = this.bounds.top;
-    this.camera.orthoBottom = this.bounds.bottom;
+    this.applyCameraFrame();
+    this.resizeBackdrop();
 
     this.rebuildBaseSurfaces();
     this.setPlayerX(this.playerX);
@@ -188,6 +311,20 @@ export class World {
 
     this.playerMesh.position.x = this.playerX;
     this.playerMesh.position.y = y - 0.56;
+  }
+
+  setCameraBeatPulse(pulse: number, grooveIntensity: number): void {
+    this.backdropBeatPulse = clamp(pulse, 0, 1);
+    this.backdropGrooveIntensity = clamp(grooveIntensity, 0, 1);
+  }
+
+  setBackdropScrollDirection(direction: Vector2): void {
+    const length = direction.length();
+    if (length <= 0.0001) {
+      return;
+    }
+
+    this.backdropTargetScrollDirection = direction.scale(1 / length);
   }
 
   syncTemporaryPlatforms(platforms: TemporaryPlatform[]): void {
@@ -254,18 +391,24 @@ export class World {
       radius: definition.radius,
       tessellation: 34,
     }, this.scene);
-    mesh.material = formationColor
-      ? this.createFlatMaterial(`special-${this.nextObjectId}-outer`, formationColor)
-      : materialSet.outer;
+    mesh.material =
+      type === "mega"
+        ? this.createFlatMaterial(`mega-${this.nextObjectId}-outer`, definition.color)
+        : formationColor
+          ? this.createFlatMaterial(`special-${this.nextObjectId}-outer`, formationColor)
+          : materialSet.outer;
     mesh.position.z = 0;
 
     const coreMesh = MeshBuilder.CreateDisc(`object-core-${this.nextObjectId}`, {
       radius: definition.radius * 0.55,
       tessellation: 24,
     }, this.scene);
-    coreMesh.material = formationColor
-      ? this.createFlatMaterial(`special-${this.nextObjectId}-core`, "#fff9dc")
-      : materialSet.inner;
+    coreMesh.material =
+      type === "mega"
+        ? this.createFlatMaterial(`mega-${this.nextObjectId}-core`, definition.glowColor)
+        : formationColor
+          ? this.createFlatMaterial(`special-${this.nextObjectId}-core`, "#fff9dc")
+          : materialSet.inner;
     coreMesh.position.z = -0.06;
 
     const object: MusicalObject = {
@@ -289,7 +432,10 @@ export class World {
       glowColor: definition.glowColor,
       noteRange: definition.noteRange,
       cooldown: definition.cooldown,
+      gravityScale: definition.gravityScale,
       pulse: 0,
+      age: 0,
+      trailTimer: type === "mega" ? 0.02 : 0,
       mesh,
       coreMesh,
     };
@@ -325,7 +471,13 @@ export class World {
   update(
     deltaTime: number,
     onSurfaceImpact: (object: MusicalObject, surface: Surface, x: number, y: number, impact: number) => void,
-    onPairImpact: (source: MusicalObject, x: number, y: number, impact: number) => void,
+    onPairImpact: (
+      source: MusicalObject,
+      other: MusicalObject,
+      x: number,
+      y: number,
+      impact: number,
+    ) => void,
     onObjectRemoved?: (object: MusicalObject) => void,
   ): void {
     const surfaces = [...this.baseSurfaces, this.playerSurface, ...this.temporarySurfaces.values()];
@@ -335,8 +487,12 @@ export class World {
     for (const pulse of this.pulses) {
       pulse.age += deltaTime;
       const progress = pulse.age / pulse.lifetime;
-      pulse.mesh.scaling.setAll(1 + progress * 1.8);
-      pulse.material.alpha = Math.max(0, 0.5 - progress * 0.5);
+      const scale = pulse.startScale + (pulse.endScale - pulse.startScale) * progress;
+      pulse.mesh.scaling.setAll(scale);
+      pulse.material.alpha = Math.max(
+        0,
+        pulse.startAlpha + (pulse.endAlpha - pulse.startAlpha) * progress,
+      );
     }
 
     this.pulses = this.pulses.filter((pulse) => {
@@ -352,12 +508,23 @@ export class World {
       for (const object of this.objects) {
         object.cooldown = Math.max(0, object.cooldown - stepDeltaTime);
         object.pulse = Math.max(0, object.pulse - stepDeltaTime * 3.6);
+        object.age += stepDeltaTime;
+        object.trailTimer = Math.max(0, object.trailTimer - stepDeltaTime);
         const previousPosition = object.position.clone();
 
-        object.velocity.y -= GAME_CONFIG.gravity * stepDeltaTime;
+        object.velocity.y -= GAME_CONFIG.gravity * object.gravityScale * stepDeltaTime;
         object.velocity.x *= 1 - GAME_CONFIG.airDrag * stepDeltaTime * 60;
         object.velocity.y *= GAME_CONFIG.damping;
         object.position.addInPlace(object.velocity.scale(stepDeltaTime));
+
+        if (object.type === "mega") {
+          this.updateMegaAppearance(object);
+
+          if (object.trailTimer <= 0) {
+            this.createMegaTrail(object.position.x, object.position.y, this.getMegaPaletteColor(object.age));
+            object.trailTimer = 0.045;
+          }
+        }
 
         for (const surface of surfaces) {
           this.resolveSurfaceCollision(object, previousPosition, surface, onSurfaceImpact);
@@ -396,7 +563,54 @@ export class World {
     };
   }
 
+  private applyCameraFrame(): void {
+    const halfWidth = (this.bounds.right - this.bounds.left) * 0.5;
+    const halfHeight = (this.bounds.top - this.bounds.bottom) * 0.5;
+    this.camera.orthoLeft = -halfWidth;
+    this.camera.orthoRight = halfWidth;
+    this.camera.orthoTop = halfHeight;
+    this.camera.orthoBottom = -halfHeight;
+  }
+
   private createBackdrop(): void {
+    this.backdropPlane = MeshBuilder.CreatePlane("backdrop-shader-plane", {
+      width: 2,
+      height: 2,
+    }, this.scene);
+    this.backdropPlane.position.set(0, 0, 9.4);
+    this.backdropMaterial = new ShaderMaterial(
+      "backdrop-shader-material",
+      this.scene,
+      {
+        vertexSource: BACKDROP_VERTEX_SHADER,
+        fragmentSource: BACKDROP_FRAGMENT_SHADER,
+        spectorName: "backdropPulse",
+      },
+      {
+        attributes: ["position", "uv"],
+        uniforms: [
+          "worldViewProjection",
+          "iTime",
+          "beatPulse",
+          "grooveIntensity",
+          "resolution",
+          "scrollDirection",
+          "scrollOffset",
+        ],
+      },
+    );
+    this.backdropMaterial.backFaceCulling = false;
+    this.backdropMaterial.setFloat("iTime", 0);
+    this.backdropMaterial.setFloat("beatPulse", 0);
+    this.backdropMaterial.setFloat("grooveIntensity", 0);
+    this.backdropMaterial.setVector2(
+      "resolution",
+      new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()),
+    );
+    this.backdropMaterial.setVector2("scrollDirection", this.backdropScrollDirection);
+    this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
+    this.backdropPlane.material = this.backdropMaterial;
+
     const glowLeft = MeshBuilder.CreateDisc("backdrop-left", {
       radius: 6.4,
       tessellation: 48,
@@ -417,6 +631,22 @@ export class World {
     }, this.scene);
     horizon.position.set(0, -7.2, 8);
     horizon.material = this.createFlatMaterial("horizon-material", "#0d2442", 0.55);
+  }
+
+  private resizeBackdrop(): void {
+    if (!this.backdropPlane || !this.backdropMaterial) {
+      return;
+    }
+
+    this.backdropPlane.scaling.set(
+      (this.bounds.right - this.bounds.left) * 0.68,
+      (this.bounds.top - this.bounds.bottom) * 0.72,
+      1,
+    );
+    this.backdropMaterial.setVector2(
+      "resolution",
+      new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()),
+    );
   }
 
   private createPlayerAvatar(): Mesh {
@@ -544,7 +774,10 @@ export class World {
 
     const tangent = new Vector2(-sweptHit.normal.y, sweptHit.normal.x);
     const tangentVelocity = Vector2.Dot(object.velocity, tangent);
-    const restitution = Math.min(0.98, object.bounce * surface.bounce);
+    const restitution =
+      object.type === "mega"
+        ? Math.min(1.08, object.bounce * surface.bounce + 0.1)
+        : Math.min(0.98, object.bounce * surface.bounce);
     object.velocity = object.velocity.subtract(
       sweptHit.normal.scale((1 + restitution) * velocityAlongNormal),
     );
@@ -675,7 +908,13 @@ export class World {
   }
 
   private resolveObjectCollisions(
-    onPairImpact: (source: MusicalObject, x: number, y: number, impact: number) => void,
+    onPairImpact: (
+      source: MusicalObject,
+      other: MusicalObject,
+      x: number,
+      y: number,
+      impact: number,
+    ) => void,
   ): void {
     for (let i = 0; i < this.objects.length; i += 1) {
       const a = this.objects[i];
@@ -703,7 +942,10 @@ export class World {
           continue;
         }
 
-        const restitution = Math.min(a.bounce, b.bounce) * 0.86;
+        const restitution =
+          a.type === "mega" || b.type === "mega"
+            ? Math.min(1.02, Math.max(a.bounce, b.bounce) * 0.94)
+            : Math.min(a.bounce, b.bounce) * 0.86;
         const impulse =
           (-(1 + restitution) * speedAlongNormal) / ((1 / a.mass) + (1 / b.mass));
         const impulseVector = normal.scale(impulse);
@@ -712,13 +954,14 @@ export class World {
 
         const impact = -speedAlongNormal;
         const source = a.noteRange[1] >= b.noteRange[1] ? a : b;
+        const other = source.id === a.id ? b : a;
 
         if (impact >= GAME_CONFIG.objectCollisionThreshold && source.cooldown <= 0) {
           source.cooldown = Math.max(source.cooldown, 0.08);
           source.pulse = Math.min(1, source.pulse + impact * 0.04);
           const center = a.position.add(b.position).scale(0.5);
           this.createPulse(center.x, center.y, source.color, impact * 0.75);
-          onPairImpact(source, center.x, center.y, impact * 0.7);
+          onPairImpact(source, other, center.x, center.y, impact * 0.7);
         }
       }
     }
@@ -772,7 +1015,55 @@ export class World {
       material,
       age: 0,
       lifetime: 0.34,
+      startScale: 1,
+      endScale: 2.8,
+      startAlpha: 0.48,
+      endAlpha: 0,
     });
+  }
+
+  private createMegaTrail(x: number, y: number, color: string): void {
+    const mesh = MeshBuilder.CreateDisc(`mega-trail-${this.pulses.length}`, {
+      radius: 0.2,
+      tessellation: 22,
+    }, this.scene);
+    const material = this.createFlatMaterial(`mega-trail-material-${this.pulses.length}`, color, 0.26);
+    mesh.material = material;
+    mesh.position.set(x, y, 0.12);
+    this.pulses.push({
+      mesh,
+      material,
+      age: 0,
+      lifetime: 0.26,
+      startScale: 1,
+      endScale: 1.85,
+      startAlpha: 0.24,
+      endAlpha: 0,
+    });
+  }
+
+  private updateMegaAppearance(object: MusicalObject): void {
+    const outerMaterial = object.mesh.material;
+    const coreMaterial = object.coreMesh.material;
+    const color = this.getMegaPaletteColor(object.age);
+    const nextColor = this.getMegaPaletteColor(object.age + 0.08);
+    object.color = color;
+    object.glowColor = nextColor;
+
+    if (outerMaterial instanceof StandardMaterial) {
+      outerMaterial.diffuseColor = hex(color);
+      outerMaterial.emissiveColor = hex(color);
+    }
+
+    if (coreMaterial instanceof StandardMaterial) {
+      coreMaterial.diffuseColor = hex(nextColor);
+      coreMaterial.emissiveColor = hex(nextColor);
+    }
+  }
+
+  private getMegaPaletteColor(age: number): string {
+    const paletteIndex = Math.floor(age * 18) % MEGA_COLORS.length;
+    return MEGA_COLORS[(paletteIndex + MEGA_COLORS.length) % MEGA_COLORS.length];
   }
 
   private createFlatMaterial(name: string, color: string, alpha = 1): StandardMaterial {

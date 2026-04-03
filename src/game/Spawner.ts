@@ -42,6 +42,7 @@ export class Spawner {
   private specialWindowIndex = -1;
   private specialBurst: SpecialBurst | null = null;
   private nextSpecialId = 0;
+  private megaQueued = false;
 
   update(deltaTime: number, bounds: ArenaBounds, activeObjects: number): SpawnRequest[] {
     this.time += deltaTime;
@@ -92,6 +93,11 @@ export class Spawner {
       }
     }
 
+    if (this.megaQueued && activeObjects + requests.length < GAME_CONFIG.maxObjects) {
+      this.megaQueued = false;
+      requests.push(this.buildMegaRequest(bounds));
+    }
+
     return requests;
   }
 
@@ -104,6 +110,7 @@ export class Spawner {
     this.currentInterval = this.spawnInterval;
     this.specialBurst = null;
     this.nextSpecialId = 0;
+    this.megaQueued = false;
   }
 
   syncTransportQuarter(quarterIndex: number, activeObjects: number): void {
@@ -194,6 +201,10 @@ export class Spawner {
     };
   }
 
+  queueMegaSpawn(): void {
+    this.megaQueued = true;
+  }
+
   private buildSpecialRequest(burst: SpecialBurst, bounds: ArenaBounds): SpawnRequest {
     if (burst.pattern === "snakeBell") {
       const progress = burst.index / Math.max(1, burst.count - 1);
@@ -246,6 +257,18 @@ export class Spawner {
       specialFormationId: burst.id,
       formationTotal: burst.count,
       formationColor: "#ffb7a7",
+    };
+  }
+
+  private buildMegaRequest(bounds: ArenaBounds): SpawnRequest {
+    const center = (bounds.left + bounds.right) * 0.5;
+    const spread = (bounds.right - bounds.left) * 0.22;
+
+    return {
+      type: "mega",
+      x: clamp(center + (Math.random() - 0.5) * spread * 2, bounds.left + 2.2, bounds.right - 2.2),
+      velocityX: (Math.random() - 0.5) * 1.4,
+      velocityY: -0.85 - Math.random() * 0.5,
     };
   }
 

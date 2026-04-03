@@ -1,3 +1,4 @@
+import { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import { GAME_CONFIG } from "./config";
 import { InputController } from "./InputController";
 import { MusicSystem } from "./MusicSystem";
@@ -14,6 +15,9 @@ const GROOVE_SNARE_THRESHOLD = 3;
 const GROOVE_HATS_THRESHOLD = 6;
 const GROOVE_DRONE_THRESHOLD = 9;
 const GROOVE_TARGET = GROOVE_DRONE_THRESHOLD;
+const MEGA_COMBO_THRESHOLD = 6.4;
+const MEGA_COMBO_COOLDOWN = 1.1;
+const MEGA_COMBO_REWARD = 2;
 
 interface FormationProgress {
   total: number;
@@ -42,7 +46,9 @@ export class GameApp {
   private hatsUnlocked = false;
   private droneUnlocked = false;
   private specialFormations = new Map<string, FormationProgress>();
+  private lastBackdropBarIndex = -1;
   private lastFrameTime = performance.now();
+  private megaComboCooldown = 0;
 
   constructor(private canvas: HTMLCanvasElement, overlayRoot: HTMLDivElement) {
     this.world = new World(canvas);
@@ -173,11 +179,18 @@ export class GameApp {
   }
 
   private tick(deltaTime: number): void {
+    this.megaComboCooldown = Math.max(0, this.megaComboCooldown - deltaTime);
     this.music.update();
     const quarterIndex = this.music.getTransportQuarterIndex();
     if (quarterIndex !== null) {
       this.spawner.syncTransportQuarter(quarterIndex, this.world.getObjectCount());
+      const barIndex = Math.floor(quarterIndex / 4);
+      if (barIndex !== this.lastBackdropBarIndex) {
+        this.lastBackdropBarIndex = barIndex;
+        this.world.setBackdropScrollDirection(this.pickBackdropDirection());
+      }
     }
+    this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
 
     const bounds = this.world.getBounds();
     this.playerX = clamp(
@@ -212,8 +225,8 @@ export class GameApp {
       (object, surface, x, y, impact) => {
         this.handleMusicalImpact(object, surface, x, y, impact);
       },
-      (object, x, y, impact) => {
-        this.handlePairImpact(object, x, y, impact);
+      (object, other, x, y, impact) => {
+        this.handlePairImpact(object, other, x, y, impact);
       },
       (object) => {
         this.handleObjectRemoved(object);
@@ -276,10 +289,32 @@ export class GameApp {
     this.overlay.showNoteLabel(played.label, screen.x, screen.y, played.color);
   }
 
-  private handlePairImpact(object: MusicalObject, x: number, y: number, impact: number): void {
+  private handlePairImpact(
+    object: MusicalObject,
+    other: MusicalObject,
+    x: number,
+    y: number,
+    impact: number,
+  ): void {
     const bounds = this.world.getBounds();
     const normalizedX = clamp((x - bounds.left) / (bounds.right - bounds.left), 0, 1);
     const pan = normalizedX * 2 - 1;
+
+    if (
+      object.type === "mega" &&
+      other.type === "mega" &&
+      impact >= MEGA_COMBO_THRESHOLD &&
+      this.megaComboCooldown <= 0
+    ) {
+      this.megaComboCooldown = MEGA_COMBO_COOLDOWN;
+      this.music.triggerMegaCombo({ impact, pan });
+      this.awardGroove(MEGA_COMBO_REWARD, "Mega Combo +2", "#fff178", 84);
+
+      const screen = this.world.worldToScreen(x, y);
+      this.overlay.showNoteLabel("DOUBLE MEGA", screen.x, screen.y - 36, "#fff9c4", "banner");
+      return;
+    }
+
     const played = this.music.triggerImpact({
       family: object.noteFamily,
       noteRange: object.noteRange,
@@ -335,6 +370,7 @@ export class GameApp {
     this.world.reset();
     this.world.setPlayerX(this.playerX = 0);
     this.specialFormations.clear();
+    this.megaComboCooldown = 0;
     this.grooveCharge = 0;
     this.snareUnlocked = false;
     this.hatsUnlocked = false;
@@ -393,53 +429,62 @@ export class GameApp {
     const requiredCaught = this.getRequiredFormationCatches(progress.total);
 
     if (progress.touched.size >= requiredCaught) {
-      this.grooveCharge = Math.min(GROOVE_TARGET, this.grooveCharge + 1);
+      this.awardGroove(1, "Groove +1", "#69f5d8", 118);
+      this.spawner.queueMegaSpawn();
       this.overlay.showNoteLabel(
-        "Groove +1",
+        "Mega Ball",
         this.canvas.clientWidth * 0.5,
-        118,
-        "#69f5d8",
+        152,
+        "#fff178",
         "banner",
       );
-
-      if (this.grooveCharge >= GROOVE_SNARE_THRESHOLD && !this.snareUnlocked) {
-        this.snareUnlocked = true;
-        this.music.setSnareEnabled(true);
-        this.overlay.showNoteLabel(
-          "Snare Unlocked",
-          this.canvas.clientWidth * 0.5,
-          84,
-          "#ffca6e",
-          "banner",
-        );
-      }
-
-      if (this.grooveCharge >= GROOVE_HATS_THRESHOLD && !this.hatsUnlocked) {
-        this.hatsUnlocked = true;
-        this.music.setHatsEnabled(true);
-        this.overlay.showNoteLabel(
-          "Hats Unlocked",
-          this.canvas.clientWidth * 0.5,
-          84,
-          "#9fedff",
-          "banner",
-        );
-      }
-
-      if (this.grooveCharge >= GROOVE_DRONE_THRESHOLD && !this.droneUnlocked) {
-        this.droneUnlocked = true;
-        this.music.setDroneEnabled(true);
-        this.overlay.showNoteLabel(
-          "Drone Unlocked",
-          this.canvas.clientWidth * 0.5,
-          84,
-          "#c5d4ff",
-          "banner",
-        );
-      }
     }
 
     this.specialFormations.delete(formationId);
+  }
+
+  private awardGroove(amount: number, label: string, color: string, y: number): void {
+    this.grooveCharge = Math.min(GROOVE_TARGET, this.grooveCharge + amount);
+    this.overlay.showNoteLabel(label, this.canvas.clientWidth * 0.5, y, color, "banner");
+    this.syncGrooveUnlocks();
+  }
+
+  private syncGrooveUnlocks(): void {
+    if (this.grooveCharge >= GROOVE_SNARE_THRESHOLD && !this.snareUnlocked) {
+      this.snareUnlocked = true;
+      this.music.setSnareEnabled(true);
+      this.overlay.showNoteLabel(
+        "Snare Unlocked",
+        this.canvas.clientWidth * 0.5,
+        84,
+        "#ffca6e",
+        "banner",
+      );
+    }
+
+    if (this.grooveCharge >= GROOVE_HATS_THRESHOLD && !this.hatsUnlocked) {
+      this.hatsUnlocked = true;
+      this.music.setHatsEnabled(true);
+      this.overlay.showNoteLabel(
+        "Hats Unlocked",
+        this.canvas.clientWidth * 0.5,
+        84,
+        "#9fedff",
+        "banner",
+      );
+    }
+
+    if (this.grooveCharge >= GROOVE_DRONE_THRESHOLD && !this.droneUnlocked) {
+      this.droneUnlocked = true;
+      this.music.setDroneEnabled(true);
+      this.overlay.showNoteLabel(
+        "Drone Unlocked",
+        this.canvas.clientWidth * 0.5,
+        84,
+        "#c5d4ff",
+        "banner",
+      );
+    }
   }
 
   private getRequiredFormationCatches(total: number): number {
@@ -515,5 +560,36 @@ export class GameApp {
     }
 
     return "Kick Only";
+  }
+
+  private getGrooveIntensity(): number {
+    if (this.droneUnlocked) {
+      return 1;
+    }
+
+    if (this.hatsUnlocked) {
+      return 0.72;
+    }
+
+    if (this.snareUnlocked) {
+      return 0.42;
+    }
+
+    return 0.16;
+  }
+
+  private pickBackdropDirection(): Vector2 {
+    const directions = [
+      [-0.92, -0.22],
+      [-0.58, 0.64],
+      [0.24, 0.96],
+      [0.82, 0.38],
+      [0.94, -0.16],
+      [0.36, -0.92],
+      [-0.28, -0.96],
+      [-0.76, 0.46],
+    ] as const;
+    const choice = directions[Math.floor(Math.random() * directions.length)];
+    return new Vector2(choice[0], choice[1]);
   }
 }
