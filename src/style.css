@@ -547,15 +547,16 @@ input {
   }
 
   .quick-dock {
-    left: calc(12px + env(safe-area-inset-left));
+    left: auto;
     right: calc(12px + env(safe-area-inset-right));
     bottom: calc(12px + env(safe-area-inset-bottom));
-    justify-content: space-between;
+    max-width: min(248px, calc(100vw - 24px));
+    justify-content: flex-end;
   }
 
   .quick-dock button {
-    flex: 1 1 calc(33.333% - 8px);
-    min-width: 0;
+    flex: 0 0 auto;
+    min-width: 72px;
   }
 
   .start-card {

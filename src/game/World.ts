@@ -327,13 +327,14 @@ export class World {
   ): MusicalObject | null {
     const definition = OBJECT_DEFINITIONS[type];
     const materialSet = this.objectMaterials.get(type);
+    const radius = definition.radius * this.getResponsiveObjectScale();
 
     if (!materialSet) {
       return null;
     }
 
     const mesh = MeshBuilder.CreateDisc(`object-${this.nextObjectId}`, {
-      radius: definition.radius,
+      radius,
       tessellation: 34,
     }, this.scene);
     mesh.material =
@@ -345,7 +346,7 @@ export class World {
     mesh.position.z = 0;
 
     const coreMesh = MeshBuilder.CreateDisc(`object-core-${this.nextObjectId}`, {
-      radius: definition.radius * 0.55,
+      radius: radius * 0.55,
       tessellation: 24,
     }, this.scene);
     coreMesh.material =
@@ -370,7 +371,7 @@ export class World {
         velocityX ?? (Math.random() - 0.5) * 2.6,
         velocityY ?? (-1.5 - Math.random() * 1.4),
       ),
-      radius: definition.radius,
+      radius,
       bounce: definition.bounce,
       mass: definition.mass,
       color: definition.color,
@@ -1009,6 +1010,11 @@ export class World {
   private getResponsivePlayerWidth(): number {
     const arenaWidth = this.bounds.right - this.bounds.left;
     return clamp(arenaWidth * 0.2, 1.85, GAME_CONFIG.playerWidth);
+  }
+
+  private getResponsiveObjectScale(): number {
+    const arenaWidth = this.bounds.right - this.bounds.left;
+    return clamp(arenaWidth / 18, 0.56, 1);
   }
 
   private createFlatMaterial(name: string, color: string, alpha = 1): StandardMaterial {
