@@ -118,6 +118,18 @@ export const OBJECT_DEFINITIONS: Record<ObjectType, ObjectDefinition> = {
     cooldown: 0.09,
     gravityScale: 1,
   },
+  snare: {
+    type: "snare",
+    noteFamily: "snare",
+    radius: 0.34,
+    bounce: 0.82,
+    mass: 0.95,
+    color: "#ff8fc5",
+    glowColor: "#ffd9ee",
+    noteRange: [68, 84],
+    cooldown: 0.14,
+    gravityScale: 1,
+  },
   mega: {
     type: "mega",
     noteFamily: "mega",

@@ -14,7 +14,7 @@ export interface SpawnRequest {
   formationColor?: string;
 }
 
-type SpecialBurstPattern = "snakeBell" | "sparkRibbon" | "bassMarch";
+type SpecialBurstPattern = "snakeBell" | "sparkRibbon" | "bassMarch" | "snareRoll";
 
 interface SpecialBurst {
   id: string;
@@ -155,7 +155,7 @@ export class Spawner {
 
     const patternRoll = Math.random();
 
-    if (patternRoll < 0.5) {
+    if (patternRoll < 0.4) {
       this.specialBurst = {
         id: `special-${this.nextSpecialId += 1}`,
         pattern: "snakeBell",
@@ -171,7 +171,7 @@ export class Spawner {
       return;
     }
 
-    if (patternRoll < 0.82) {
+    if (patternRoll < 0.68) {
       this.specialBurst = {
         id: `special-${this.nextSpecialId += 1}`,
         pattern: "sparkRibbon",
@@ -183,6 +183,22 @@ export class Spawner {
         centerBias: [0.38, 0.5, 0.62][Math.floor(Math.random() * 3)],
         amplitude: 0.24,
         waveCount: 0.9,
+      };
+      return;
+    }
+
+    if (patternRoll < 0.9) {
+      this.specialBurst = {
+        id: `special-${this.nextSpecialId += 1}`,
+        pattern: "snareRoll",
+        index: 0,
+        count: 22,
+        stepInterval: 0.06,
+        nextSpawnIn: 0.04,
+        direction: Math.random() < 0.5 ? -1 : 1,
+        centerBias: [0.34, 0.5, 0.66][Math.floor(Math.random() * 3)],
+        amplitude: 0.18,
+        waveCount: 0.72,
       };
       return;
     }
@@ -244,6 +260,25 @@ export class Spawner {
       };
     }
 
+    if (burst.pattern === "snareRoll") {
+      const progress = burst.index / Math.max(1, burst.count - 1);
+      const directedProgress = burst.direction > 0 ? progress : 1 - progress;
+      const center = bounds.left + burst.centerBias * (bounds.right - bounds.left);
+      const amplitude = (bounds.right - bounds.left) * burst.amplitude;
+      const angle = directedProgress * Math.PI * 2 * burst.waveCount;
+      const waveX = center + Math.sin(angle) * amplitude;
+
+      return {
+        type: "snare",
+        x: clamp(waveX, bounds.left + 1.45, bounds.right - 1.45),
+        velocityX: Math.cos(angle) * 1.45 * burst.direction,
+        velocityY: -1.12,
+        specialFormationId: burst.id,
+        formationTotal: burst.count,
+        formationColor: "#ffc0dd",
+      };
+    }
+
     const laneOffsets = [-0.18, 0.02, 0.2];
     const lane = laneOffsets[burst.index % laneOffsets.length];
     const centerBias = burst.direction > 0 ? 0.26 : 0.74;
@@ -275,12 +310,16 @@ export class Spawner {
   private pickType(): ObjectType {
     const roll = Math.random();
 
-    if (roll < 0.38) {
+    if (roll < 0.34) {
       return "bass";
     }
 
-    if (roll < 0.68) {
+    if (roll < 0.59) {
       return "bell";
+    }
+
+    if (roll < 0.77) {
+      return "snare";
     }
 
     return "spark";

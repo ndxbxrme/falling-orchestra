@@ -246,6 +246,7 @@ export class UIOverlay {
             <ul class="legend-list">
               <li class="legend-item"><span class="swatch bell"></span> Bell Drop: bright, mid-air shimmer, upper register.</li>
               <li class="legend-item"><span class="swatch bass"></span> Bass Blob: heavier, weighty impacts, low register.</li>
+              <li class="legend-item"><span class="swatch snare"></span> Snare Pop: crisp percussion hits that cut through the groove.</li>
               <li class="legend-item"><span class="swatch spark"></span> Spark Orb: small, lively, fast plucks and ricochets.</li>
             </ul>
           </section>

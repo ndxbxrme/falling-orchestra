@@ -12,6 +12,7 @@
   --accent: #ffca6e;
   --accent-2: #69f5d8;
   --accent-bass: #ff7b6b;
+  --accent-snare: #ff8fc5;
   --accent-spark: #9fedff;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
 }
@@ -409,6 +410,11 @@ input {
 .swatch.bass {
   color: var(--accent-bass);
   background: var(--accent-bass);
+}
+
+.swatch.snare {
+  color: var(--accent-snare);
+  background: var(--accent-snare);
 }
 
 .swatch.spark {

@@ -529,7 +529,7 @@ export class GameApp {
   }
 
   private getRequiredFormationCatches(total: number): number {
-    const allowedMisses = total >= 10 ? 2 : 1;
+    const allowedMisses = total >= 18 ? 4 : total >= 10 ? 2 : 1;
     return Math.max(1, total - allowedMisses);
   }
 

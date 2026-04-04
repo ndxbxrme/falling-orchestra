@@ -132,6 +132,14 @@ export class MusicSystem {
       };
     }
 
+    if (options.family === "snare") {
+      this.playSnareImpact(clamp(options.impact, 0, 18), clamp(options.pan, -0.9, 0.9), when);
+      return {
+        label: "SNARE",
+        color: options.color,
+      };
+    }
+
     const harmony =
       this.harmonyControlMode === "cycle"
         ? this.getHarmonyForTime(when)
@@ -306,6 +314,11 @@ export class MusicSystem {
       return;
     }
 
+    if (options.family === "snare") {
+      this.playSnareImpact(options.gain * 18, options.pan, options.when);
+      return;
+    }
+
     this.playSparkVoice(frequency, options.gain, options.when, output);
   }
 
@@ -476,6 +489,69 @@ export class MusicSystem {
     body.stop(when + 0.13);
     snap.start(when);
     snap.stop(when + 0.03);
+  }
+
+  private playSnareImpact(impact: number, pan: number, when: number): void {
+    if (!this.audioContext || !this.masterGain) {
+      return;
+    }
+
+    const ctx = this.audioContext;
+    const noise = ctx.createBufferSource();
+    const noiseFilter = ctx.createBiquadFilter();
+    const noiseGain = ctx.createGain();
+    const body = ctx.createOscillator();
+    const bodyGain = ctx.createGain();
+    const click = ctx.createOscillator();
+    const clickGain = ctx.createGain();
+    const output = ctx.createGain();
+    const panNode = ctx.createStereoPanner();
+    const energy = 0.42 + clamp(impact / 18, 0, 1) * 0.5;
+
+    output.connect(panNode);
+    panNode.connect(this.masterGain);
+    panNode.pan.setValueAtTime(pan, when);
+
+    noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
+    noiseFilter.type = "bandpass";
+    noiseFilter.frequency.setValueAtTime(2280, when);
+    noiseFilter.Q.value = 0.95;
+    noiseGain.gain.setValueAtTime(0.0001, when);
+    noiseGain.gain.linearRampToValueAtTime(0.22 * energy, when + 0.002);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.11);
+
+    body.type = "triangle";
+    body.frequency.setValueAtTime(284, when);
+    body.frequency.exponentialRampToValueAtTime(138, when + 0.07);
+    bodyGain.gain.setValueAtTime(0.0001, when);
+    bodyGain.gain.linearRampToValueAtTime(0.14 * energy, when + 0.002);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.09);
+
+    click.type = "square";
+    click.frequency.setValueAtTime(3600, when);
+    click.frequency.exponentialRampToValueAtTime(1200, when + 0.018);
+    clickGain.gain.setValueAtTime(0.0001, when);
+    clickGain.gain.linearRampToValueAtTime(0.075 * energy, when + 0.001);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.02);
+
+    output.gain.setValueAtTime(0.92, when);
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(output);
+
+    body.connect(bodyGain);
+    bodyGain.connect(output);
+
+    click.connect(clickGain);
+    clickGain.connect(output);
+
+    noise.start(when);
+    noise.stop(when + 0.12);
+    body.start(when);
+    body.stop(when + 0.1);
+    click.start(when);
+    click.stop(when + 0.022);
   }
 
   private playHat(when: number, offbeat: boolean): void {
