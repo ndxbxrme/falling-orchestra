@@ -642,7 +642,7 @@ export class World {
     const wallTop = this.bounds.top - 0.9;
     const wallBottom = this.bounds.bottom + 0.9;
     const arenaWidth = this.bounds.right - this.bounds.left;
-    const slopeInset = clamp(arenaWidth * 0.06, 0.42, 1.3);
+    const slopeInset = clamp(arenaWidth * 0.085, 0.72, 1.85);
     const slopeLength = clamp(arenaWidth * 0.12, 0.95, 3.1);
     const slopeRise = clamp(slopeLength * 0.24, 0.28, 0.82);
     const slopeTopY = GAME_CONFIG.playerY - clamp(arenaWidth * 0.015 + 0.42, 0.48, 0.78);
