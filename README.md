@@ -16,6 +16,15 @@ npm run build
 npm run preview
 ```
 
+Live demo: https://ndxbxrme.github.io/falling-orchestra/
+
+## Design Docs
+
+- [`docs/PROTOTYPE-PLAN.md`](./docs/PROTOTYPE-PLAN.md): original prototype brief
+- [`docs/BUILD-NOTES.md`](./docs/BUILD-NOTES.md): implementation notes and tradeoffs
+- [`docs/EXPERIENCE-DIRECTION.md`](./docs/EXPERIENCE-DIRECTION.md): blue-sky product and experience direction
+- [`docs/SONG-DATA-SCHEMA.md`](./docs/SONG-DATA-SCHEMA.md): first-pass song / album serialization plan
+
 ## GitHub Pages
 
 GitHub Pages deploys are wired through GitHub Actions in [`.github/workflows/pages.yml`](./.github/workflows/pages.yml).
