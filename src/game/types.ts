@@ -84,6 +84,9 @@ export interface PlayedNote {
 
 export interface OverlayState {
   started: boolean;
+  songCompleted: boolean;
+  songCompletionTitle: string;
+  songCompletionMessage: string;
   activeObjects: number;
   rootNote: RootNoteName;
   mode: ScaleModeName;
@@ -94,9 +97,7 @@ export interface OverlayState {
   spawnPattern: SpawnPattern;
   grooveCharge: number;
   grooveTarget: number;
-  snareUnlocked: boolean;
-  hatsUnlocked: boolean;
-  droneUnlocked: boolean;
+  grooveLevel: number;
   grooveLayerLabel: string;
   activeFormationCaught: number;
   activeFormationRequired: number;

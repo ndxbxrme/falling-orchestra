@@ -494,6 +494,13 @@ input {
   color: var(--accent-2);
 }
 
+.completion-card {
+  background:
+    radial-gradient(circle at top right, rgba(255, 202, 110, 0.16), transparent 32%),
+    radial-gradient(circle at left center, rgba(105, 245, 216, 0.08), transparent 42%),
+    linear-gradient(180deg, rgba(11, 27, 45, 0.94), rgba(6, 15, 27, 0.94));
+}
+
 .start-card.hidden {
   display: none;
 }

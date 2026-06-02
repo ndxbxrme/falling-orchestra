@@ -1,5 +1,6 @@
 import { ROOT_NOTES, SCALE_MODES } from "./config";
 import { ScaleQuantizer } from "./ScaleQuantizer";
+import type { HarmonySpanConfig, LoopClipConfig, SongConfig } from "./songConfig";
 import type { InstrumentFamily, PlayedNote, RootNoteName, ScaleModeName } from "./types";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -9,19 +10,30 @@ const clamp = (value: number, min: number, max: number): number =>
 
 const midiToFrequency = (midi: number): number => 440 * 2 ** ((midi - 69) / 12);
 const SIXTEENTH_NOTES_PER_BEAT = 4;
-const BEATS_PER_BAR = 4;
-const BARS_PER_SECTION = 4;
+const DEFAULT_BEATS_PER_BAR = 4;
 const DEFAULT_BPM = 120;
+const INITIAL_TRANSPORT_LEAD = 0.35;
 const MIN_SCHEDULE_LOOKAHEAD = 0.012;
 const TRANSPORT_LOOKAHEAD = 0.16;
-const EVOLVING_HARMONIES: Array<{ rootNote: RootNoteName; mode: ScaleModeName }> = [
-  { rootNote: "D", mode: "dorian" },
-  { rootNote: "G", mode: "mixolydian" },
-];
-
+const LOOP_DEBUG =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 const midiToLabel = (midi: number): string => {
   const octave = Math.floor(midi / 12) - 1;
   return `${NOTE_NAMES[midi % 12]}${octave}`;
+};
+
+const logLoopDebug = (message: string, details?: Record<string, unknown>): void => {
+  if (!LOOP_DEBUG) {
+    return;
+  }
+
+  if (details) {
+    console.debug(`[MusicSystem] ${message}`, details);
+    return;
+  }
+
+  console.debug(`[MusicSystem] ${message}`);
 };
 
 export class MusicSystem {
@@ -29,21 +41,72 @@ export class MusicSystem {
   mode: ScaleModeName = "ionian";
   muted = false;
   volume = 0.72;
-  snareEnabled = false;
-  hatsEnabled = false;
-  droneEnabled = false;
+  currentGrooveLevel = 1;
 
   private audioContext?: AudioContext;
   private masterGain?: GainNode;
   private compressor?: DynamicsCompressorNode;
   private quantizer = new ScaleQuantizer();
   private bpm = DEFAULT_BPM;
+  private beatsPerBar = DEFAULT_BEATS_PER_BAR;
+  private harmonyCycleBars = 4;
   private transportStartTime?: number;
+  private nextGrooveBoundaryTime?: number;
   private nextQuarterIndex = 0;
   private nextEighthIndex = 0;
   private nextBarIndex = 0;
   private noiseBuffer?: AudioBuffer;
   private harmonyControlMode: "cycle" | "manual" = "cycle";
+  private song?: SongConfig;
+  private grooveLevels = new Map<
+    number,
+    { main?: LoopClipConfig; intro?: LoopClipConfig; completesSong?: boolean }
+  >();
+  private harmonyTimeline: HarmonySpanConfig[] = [];
+  private loopAudioData = new Map<string, ArrayBuffer>();
+  private loopFetchPromise?: Promise<void>;
+  private loopBuffers = new Map<string, AudioBuffer>();
+  private loopLoadPromise?: Promise<void>;
+  private desiredGrooveLevel = 1;
+  private queuedTransitionLevel: number | null = null;
+  private scheduledLoopSources = new Set<AudioBufferSourceNode>();
+  private songCompleted = false;
+  private songEndingScheduled = false;
+
+  loadSong(song: SongConfig): void {
+    this.song = song;
+    this.bpm = song.transport.bpm;
+    this.beatsPerBar = song.transport.beatsPerBar;
+    this.harmonyCycleBars = song.transport.harmonyCycleBars;
+    this.harmonyTimeline = song.harmonyTimeline;
+    this.grooveLevels = new Map(
+      song.grooveLevels.map((grooveLevel) => [
+        grooveLevel.level,
+        {
+          main: grooveLevel.main,
+          intro: grooveLevel.intro,
+          completesSong: grooveLevel.completesSong,
+        },
+      ]),
+    );
+
+    const baseLevel = song.grooveLevels[0]?.level;
+    if (baseLevel === undefined) {
+      throw new Error(`Song "${song.id}" is missing groove levels`);
+    }
+
+    this.currentGrooveLevel = baseLevel;
+    this.desiredGrooveLevel = baseLevel;
+    this.queuedTransitionLevel = null;
+    this.songCompleted = false;
+    this.songEndingScheduled = false;
+    this.nextGrooveBoundaryTime = undefined;
+    if (this.harmonyTimeline.length > 0) {
+      this.rootNote = this.harmonyTimeline[0].rootNote;
+      this.mode = this.harmonyTimeline[0].mode;
+    }
+    void this.prefetchLoopAssets();
+  }
 
   async unlock(): Promise<void> {
     if (!this.audioContext) {
@@ -67,11 +130,18 @@ export class MusicSystem {
       await this.audioContext.resume();
     }
 
+    await this.ensureLoopBuffersLoaded();
+
     if (this.transportStartTime === undefined) {
-      this.transportStartTime = this.audioContext.currentTime + 0.05;
-      this.nextQuarterIndex = 0;
-      this.nextEighthIndex = 0;
-      this.nextBarIndex = 0;
+      const startTime = this.getInitialTransportStartTime();
+      this.primeTransport(startTime);
+      this.scheduleStartupGroove(startTime);
+      logLoopDebug("unlock scheduled initial groove loop", {
+        currentTime: this.audioContext.currentTime,
+        startTime,
+        leadTime: startTime - this.audioContext.currentTime,
+        grooveLevel: this.currentGrooveLevel,
+      });
     }
   }
 
@@ -101,16 +171,36 @@ export class MusicSystem {
     this.syncMasterVolume();
   }
 
-  setSnareEnabled(enabled: boolean): void {
-    this.snareEnabled = enabled;
+  setGrooveLevel(level: number): void {
+    if (!this.grooveLevels.has(level) || this.songCompleted || this.songEndingScheduled) {
+      return;
+    }
+
+    this.desiredGrooveLevel = level;
+
+    if (level === this.currentGrooveLevel) {
+      this.queuedTransitionLevel = null;
+      return;
+    }
+
+    this.queuedTransitionLevel = level;
   }
 
-  setHatsEnabled(enabled: boolean): void {
-    this.hatsEnabled = enabled;
-  }
+  resetGroovePlayback(): void {
+    if (!this.audioContext) {
+      return;
+    }
 
-  setDroneEnabled(enabled: boolean): void {
-    this.droneEnabled = enabled;
+    const baseLevel = this.getBaseGrooveLevel();
+    const nextStartTime = this.getInitialTransportStartTime();
+    this.stopScheduledLoopSources();
+    this.currentGrooveLevel = baseLevel;
+    this.desiredGrooveLevel = baseLevel;
+    this.queuedTransitionLevel = null;
+    this.songCompleted = false;
+    this.songEndingScheduled = false;
+    this.primeTransport(nextStartTime);
+    this.scheduleStartupGroove(nextStartTime);
   }
 
   triggerImpact(options: {
@@ -179,17 +269,24 @@ export class MusicSystem {
     void this.audioContext?.close();
   }
 
+  isSongCompleted(): boolean {
+    return this.songCompleted;
+  }
+
   update(): void {
     if (!this.audioContext || !this.masterGain) {
       return;
     }
 
+    if (this.transportStartTime === undefined) {
+      return;
+    }
+
     const quarterDuration = 60 / this.bpm;
     const eighthDuration = quarterDuration / 2;
-    const barDuration = quarterDuration * BEATS_PER_BAR;
+    const barDuration = quarterDuration * this.beatsPerBar;
     const now = this.audioContext.currentTime;
-    const startTime = this.transportStartTime ?? (now + 0.05);
-    this.transportStartTime = startTime;
+    const startTime = this.transportStartTime;
     if (this.harmonyControlMode === "cycle") {
       this.syncDisplayedHarmony(now);
     }
@@ -212,28 +309,25 @@ export class MusicSystem {
     const horizon = now + TRANSPORT_LOOKAHEAD;
 
     while (startTime + this.nextQuarterIndex * quarterDuration <= horizon) {
-      const when = startTime + this.nextQuarterIndex * quarterDuration;
-      this.playKick(when, this.nextQuarterIndex % 4 === 0);
-      if (this.snareEnabled && (this.nextQuarterIndex % 4 === 1 || this.nextQuarterIndex % 4 === 3)) {
-        this.playSnare(when);
-      }
       this.nextQuarterIndex += 1;
     }
 
     while (startTime + this.nextEighthIndex * eighthDuration <= horizon) {
-      const when = startTime + this.nextEighthIndex * eighthDuration;
-      if (this.hatsEnabled) {
-        this.playHat(when, this.nextEighthIndex % 2 === 1);
-      }
       this.nextEighthIndex += 1;
     }
 
     while (startTime + this.nextBarIndex * barDuration <= horizon) {
-      const when = startTime + this.nextBarIndex * barDuration;
-      if (this.droneEnabled) {
-        this.playDrone(when, barDuration);
-      }
       this.nextBarIndex += 1;
+    }
+
+    while (
+      this.nextGrooveBoundaryTime !== undefined &&
+      this.nextGrooveBoundaryTime <= horizon &&
+      !this.songEndingScheduled &&
+      !this.songCompleted
+    ) {
+      const when = this.nextGrooveBoundaryTime;
+      this.scheduleLoopBoundary(when);
     }
   }
 
@@ -356,67 +450,281 @@ export class MusicSystem {
   }
 
   private getHarmonyForTime(time: number): { rootNote: RootNoteName; mode: ScaleModeName } {
-    if (this.transportStartTime === undefined) {
-      return EVOLVING_HARMONIES[0];
+    const fallbackHarmony = this.harmonyTimeline[0] ?? {
+      rootNote: this.rootNote,
+      mode: this.mode,
+      startBar: 1,
+      lengthBars: this.harmonyCycleBars,
+    };
+
+    if (this.transportStartTime === undefined || this.harmonyTimeline.length === 0) {
+      return { rootNote: fallbackHarmony.rootNote, mode: fallbackHarmony.mode };
     }
 
-    const barDuration = (60 / this.bpm) * BEATS_PER_BAR;
+    const barDuration = (60 / this.bpm) * this.beatsPerBar;
 
     if (time <= this.transportStartTime) {
-      return EVOLVING_HARMONIES[0];
+      return { rootNote: fallbackHarmony.rootNote, mode: fallbackHarmony.mode };
     }
 
     const barsSinceStart = Math.floor((time - this.transportStartTime) / barDuration);
-    const sectionIndex = Math.floor(barsSinceStart / BARS_PER_SECTION);
-    return EVOLVING_HARMONIES[sectionIndex % EVOLVING_HARMONIES.length];
+    const cycleBar = ((barsSinceStart % this.harmonyCycleBars) + this.harmonyCycleBars) % this.harmonyCycleBars + 1;
+    const harmony =
+      this.harmonyTimeline.find((span) => cycleBar >= span.startBar && cycleBar < span.startBar + span.lengthBars) ??
+      fallbackHarmony;
+
+    return {
+      rootNote: harmony.rootNote,
+      mode: harmony.mode,
+    };
   }
 
-  private playKick(when: number, accented: boolean): void {
+  private async ensureLoopBuffersLoaded(): Promise<void> {
+    if (this.loopLoadPromise) {
+      return this.loopLoadPromise;
+    }
+
+    if (!this.audioContext) {
+      return;
+    }
+
+    await this.prefetchLoopAssets();
+
+    this.loopLoadPromise = Promise.all(
+      [...this.loopAudioData.entries()].map(async ([assetUrl, audioData]) => {
+        if (this.loopBuffers.has(assetUrl)) {
+          return;
+        }
+        const buffer = await this.audioContext!.decodeAudioData(audioData.slice(0));
+        this.loopBuffers.set(assetUrl, buffer);
+        logLoopDebug("decoded loop buffer", {
+          assetUrl,
+          duration: buffer.duration,
+          sampleRate: buffer.sampleRate,
+        });
+      }),
+    ).then(() => undefined);
+
+    return this.loopLoadPromise;
+  }
+
+  private async prefetchLoopAssets(): Promise<void> {
+    if (this.loopFetchPromise) {
+      return this.loopFetchPromise;
+    }
+
+    const assetUrls = new Set<string>();
+    for (const grooveLevel of this.grooveLevels.values()) {
+      if (grooveLevel.main) {
+        assetUrls.add(grooveLevel.main.src);
+      }
+      if (grooveLevel.intro) {
+        assetUrls.add(grooveLevel.intro.src);
+      }
+    }
+
+    this.loopFetchPromise = Promise.all(
+      [...assetUrls].map(async (assetUrl) => {
+        if (this.loopAudioData.has(assetUrl)) {
+          return;
+        }
+
+        const response = await fetch(assetUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to load loop asset: ${assetUrl}`);
+        }
+
+        this.loopAudioData.set(assetUrl, await response.arrayBuffer());
+      }),
+    ).then(() => undefined);
+
+    return this.loopFetchPromise;
+  }
+
+  private getBaseGrooveLevel(): number {
+    return this.song?.grooveLevels[0]?.level ?? this.currentGrooveLevel;
+  }
+
+  private getInitialTransportStartTime(): number {
+    return (this.audioContext?.currentTime ?? 0) + INITIAL_TRANSPORT_LEAD;
+  }
+
+  private primeTransport(startTime: number): void {
+    this.transportStartTime = startTime;
+    this.nextGrooveBoundaryTime = undefined;
+    this.nextQuarterIndex = 0;
+    this.nextEighthIndex = 0;
+    this.nextBarIndex = 0;
+    logLoopDebug("primed transport", { startTime });
+  }
+
+  private scheduleStartupGroove(startTime: number): void {
+    const baseLevel = this.getBaseGrooveLevel();
+    const grooveLevel = this.grooveLevels.get(baseLevel);
+    const intro = grooveLevel?.intro;
+    const main = grooveLevel?.main;
+    let mainStartTime = startTime;
+
+    if (intro) {
+      this.scheduleGrooveClip(baseLevel, "intro", startTime);
+      mainStartTime += this.getClipDuration(intro);
+    }
+
+    if (!main) {
+      this.nextGrooveBoundaryTime = undefined;
+      return;
+    }
+
+    this.scheduleGrooveClip(baseLevel, "main", mainStartTime);
+    this.nextGrooveBoundaryTime = mainStartTime + this.getClipDuration(main);
+  }
+
+  private scheduleLoopBoundary(when: number): void {
+    logLoopDebug("loop boundary", {
+      when,
+      currentGrooveLevel: this.currentGrooveLevel,
+      desiredGrooveLevel: this.desiredGrooveLevel,
+      queuedTransitionLevel: this.queuedTransitionLevel,
+      nextGrooveBoundaryTime: this.nextGrooveBoundaryTime,
+    });
+
+    this.nextGrooveBoundaryTime = undefined;
+
+    const nextLevel = this.queuedTransitionLevel;
+    if (nextLevel !== null && nextLevel !== this.currentGrooveLevel) {
+      const grooveLevel = this.grooveLevels.get(nextLevel);
+      this.queuedTransitionLevel = null;
+      const intro = grooveLevel?.intro;
+      const main = grooveLevel?.main;
+
+      if (intro) {
+        const introEndTime = when + this.getClipDuration(intro);
+        this.scheduleGrooveClip(nextLevel, "intro", when, {
+          onEnded: grooveLevel?.completesSong
+            ? () => {
+                this.songCompleted = true;
+                this.songEndingScheduled = false;
+                this.queuedTransitionLevel = null;
+                this.desiredGrooveLevel = nextLevel;
+                this.nextGrooveBoundaryTime = undefined;
+              }
+            : undefined,
+        });
+
+        if (main) {
+          this.scheduleGrooveClip(nextLevel, "main", introEndTime);
+          this.currentGrooveLevel = nextLevel;
+          this.desiredGrooveLevel = nextLevel;
+          this.nextGrooveBoundaryTime = introEndTime + this.getClipDuration(main);
+          return;
+        }
+
+        if (grooveLevel?.completesSong) {
+          this.currentGrooveLevel = nextLevel;
+          this.desiredGrooveLevel = nextLevel;
+          this.songEndingScheduled = true;
+          return;
+        }
+
+        const fallbackMain = this.grooveLevels.get(this.currentGrooveLevel)?.main;
+        if (fallbackMain) {
+          this.scheduleGrooveClip(this.currentGrooveLevel, "main", introEndTime);
+          this.desiredGrooveLevel = this.currentGrooveLevel;
+          this.nextGrooveBoundaryTime = introEndTime + this.getClipDuration(fallbackMain);
+        }
+        return;
+      }
+
+      if (main) {
+        this.scheduleGrooveClip(nextLevel, "main", when);
+        this.currentGrooveLevel = nextLevel;
+        this.desiredGrooveLevel = nextLevel;
+        this.nextGrooveBoundaryTime = when + this.getClipDuration(main);
+        return;
+      }
+    }
+
+    const currentMain = this.grooveLevels.get(this.currentGrooveLevel)?.main;
+    if (!currentMain) {
+      return;
+    }
+
+    this.scheduleGrooveClip(this.currentGrooveLevel, "main", when);
+    this.nextGrooveBoundaryTime = when + this.getClipDuration(currentMain);
+  }
+
+  private scheduleGrooveClip(
+    level: number,
+    kind: "main" | "intro",
+    when: number,
+    options?: { onEnded?: () => void },
+  ): void {
     if (!this.audioContext || !this.masterGain) {
       return;
     }
 
-    const ctx = this.audioContext;
-    const body = ctx.createOscillator();
-    const bodyGain = ctx.createGain();
-    const clickFilter = ctx.createBiquadFilter();
-    const click = ctx.createBufferSource();
-    const clickGain = ctx.createGain();
-    const output = ctx.createGain();
-    const duration = accented ? 0.32 : 0.26;
-    const peakGain = accented ? 0.54 : 0.42;
-    const startFrequency = accented ? 156 : 138;
-    const endFrequency = accented ? 44 : 48;
+    const grooveLevel = this.grooveLevels.get(level);
+    const clip = kind === "intro" ? grooveLevel?.intro : grooveLevel?.main;
+    const assetUrl = clip?.src;
+    if (!clip || !assetUrl) {
+      return;
+    }
 
-    body.type = "sine";
-    body.frequency.setValueAtTime(startFrequency, when);
-    body.frequency.exponentialRampToValueAtTime(endFrequency, when + 0.11);
+    const buffer = this.loopBuffers.get(assetUrl);
+    if (!buffer) {
+      logLoopDebug("missing loop buffer", { level, kind, assetUrl });
+      return;
+    }
 
-    bodyGain.gain.setValueAtTime(0.0001, when);
-    bodyGain.gain.linearRampToValueAtTime(peakGain, when + 0.005);
-    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + duration);
+    const source = this.audioContext.createBufferSource();
+    const gainNode = this.audioContext.createGain();
+    const now = this.audioContext.currentTime;
 
-    clickFilter.type = "highpass";
-    clickFilter.frequency.setValueAtTime(1600, when);
-    clickGain.gain.setValueAtTime(accented ? 0.12 : 0.08, when);
-    clickGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.03);
+    source.buffer = buffer;
+    gainNode.gain.setValueAtTime(kind === "intro" ? 0.96 : 1, when);
+    source.connect(gainNode);
+    gainNode.connect(this.masterGain);
+    logLoopDebug("scheduling groove clip", {
+      level,
+      kind,
+      assetUrl,
+      now,
+      when,
+      delay: when - now,
+      bufferDuration: buffer.duration,
+      stopTime: when + Math.min(buffer.duration, this.getClipDuration(clip)),
+    });
+    source.start(when);
+    source.stop(when + Math.min(buffer.duration, this.getClipDuration(clip)));
+    source.addEventListener("ended", () => {
+      this.scheduledLoopSources.delete(source);
+      source.disconnect();
+      gainNode.disconnect();
+      options?.onEnded?.();
+      logLoopDebug("groove clip ended", {
+        level,
+        kind,
+        assetUrl,
+        endedAt: this.audioContext?.currentTime,
+      });
+    });
+    this.scheduledLoopSources.add(source);
+  }
 
-    output.gain.setValueAtTime(0.78, when);
+  private getClipDuration(clip: LoopClipConfig): number {
+    return (60 / this.bpm) * this.beatsPerBar * clip.bars;
+  }
 
-    body.connect(bodyGain);
-    bodyGain.connect(output);
-
-    click.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
-    click.connect(clickFilter);
-    clickFilter.connect(clickGain);
-    clickGain.connect(output);
-
-    output.connect(this.masterGain);
-
-    body.start(when);
-    body.stop(when + duration + 0.02);
-    click.start(when);
-    click.stop(when + 0.03);
+  private stopScheduledLoopSources(): void {
+    for (const source of this.scheduledLoopSources) {
+      try {
+        source.stop();
+      } catch {
+        // Ignore sources that already ended or were never started.
+      }
+      source.disconnect();
+    }
+    this.scheduledLoopSources.clear();
   }
 
   private createNoiseBuffer(): AudioBuffer {
@@ -431,66 +739,6 @@ export class MusicSystem {
 
     return buffer;
   }
-
-  private playSnare(when: number): void {
-    if (!this.audioContext || !this.masterGain) {
-      return;
-    }
-
-    const ctx = this.audioContext;
-    const noise = ctx.createBufferSource();
-    const noiseFilter = ctx.createBiquadFilter();
-    const noiseGain = ctx.createGain();
-    const body = ctx.createOscillator();
-    const bodyGain = ctx.createGain();
-    const snap = ctx.createOscillator();
-    const snapGain = ctx.createGain();
-    const output = ctx.createGain();
-
-    noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
-    noiseFilter.type = "bandpass";
-    noiseFilter.frequency.setValueAtTime(2050, when);
-    noiseFilter.Q.value = 0.9;
-    noiseGain.gain.setValueAtTime(0.0001, when);
-    noiseGain.gain.linearRampToValueAtTime(0.3, when + 0.003);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.16);
-
-    body.type = "triangle";
-    body.frequency.setValueAtTime(240, when);
-    body.frequency.exponentialRampToValueAtTime(118, when + 0.1);
-    bodyGain.gain.setValueAtTime(0.0001, when);
-    bodyGain.gain.linearRampToValueAtTime(0.16, when + 0.002);
-    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.12);
-
-    snap.type = "square";
-    snap.frequency.setValueAtTime(3100, when);
-    snap.frequency.exponentialRampToValueAtTime(900, when + 0.026);
-    snapGain.gain.setValueAtTime(0.0001, when);
-    snapGain.gain.linearRampToValueAtTime(0.1, when + 0.001);
-    snapGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.028);
-
-    output.gain.setValueAtTime(0.94, when);
-
-    noise.connect(noiseFilter);
-    noiseFilter.connect(noiseGain);
-    noiseGain.connect(output);
-
-    body.connect(bodyGain);
-    bodyGain.connect(output);
-
-    snap.connect(snapGain);
-    snapGain.connect(output);
-
-    output.connect(this.masterGain);
-
-    noise.start(when);
-    noise.stop(when + 0.17);
-    body.start(when);
-    body.stop(when + 0.13);
-    snap.start(when);
-    snap.stop(when + 0.03);
-  }
-
   private playSnareImpact(impact: number, pan: number, when: number): void {
     if (!this.audioContext || !this.masterGain) {
       return;
@@ -552,130 +800,6 @@ export class MusicSystem {
     body.stop(when + 0.1);
     click.start(when);
     click.stop(when + 0.022);
-  }
-
-  private playHat(when: number, offbeat: boolean): void {
-    if (!this.audioContext || !this.masterGain) {
-      return;
-    }
-
-    const ctx = this.audioContext;
-    const noise = ctx.createBufferSource();
-    const filter = ctx.createBiquadFilter();
-    const tightFilter = ctx.createBiquadFilter();
-    const env = ctx.createGain();
-    const output = ctx.createGain();
-
-    noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
-
-    filter.type = "highpass";
-    filter.frequency.setValueAtTime(offbeat ? 6200 : 5600, when);
-    filter.Q.value = 0.8;
-
-    tightFilter.type = "bandpass";
-    tightFilter.frequency.setValueAtTime(offbeat ? 9800 : 9200, when);
-    tightFilter.Q.value = 1.3;
-
-    env.gain.setValueAtTime(0.0001, when);
-    env.gain.linearRampToValueAtTime(offbeat ? 0.13 : 0.09, when + 0.0015);
-    env.gain.exponentialRampToValueAtTime(0.0001, when + (offbeat ? 0.075 : 0.05));
-
-    output.gain.setValueAtTime(0.62, when);
-
-    noise.connect(filter);
-    filter.connect(tightFilter);
-    tightFilter.connect(env);
-    env.connect(output);
-    output.connect(this.masterGain);
-
-    noise.start(when);
-    noise.stop(when + 0.08);
-  }
-
-  private playDrone(when: number, barDuration: number): void {
-    if (!this.audioContext || !this.masterGain) {
-      return;
-    }
-
-    const harmony =
-      this.harmonyControlMode === "cycle"
-        ? this.getHarmonyForTime(when)
-        : { rootNote: this.rootNote, mode: this.mode };
-    const rootMidi = this.quantizer.quantizeMidi(
-      ROOT_NOTES[harmony.rootNote],
-      SCALE_MODES[harmony.mode],
-      47,
-    );
-    const fifthMidi = this.quantizer.quantizeMidi(
-      ROOT_NOTES[harmony.rootNote],
-      SCALE_MODES[harmony.mode],
-      rootMidi + 7,
-    );
-    const ninthMidi = this.quantizer.quantizeMidi(
-      ROOT_NOTES[harmony.rootNote],
-      SCALE_MODES[harmony.mode],
-      rootMidi + 14,
-    );
-    const sustain = barDuration * 0.94;
-    const endTime = when + sustain;
-    const ctx = this.audioContext;
-    const output = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    const root = ctx.createOscillator();
-    const fifth = ctx.createOscillator();
-    const air = ctx.createOscillator();
-    const rootGain = ctx.createGain();
-    const fifthGain = ctx.createGain();
-    const airGain = ctx.createGain();
-    const lfo = ctx.createOscillator();
-    const lfoDepth = ctx.createGain();
-
-    root.type = "triangle";
-    root.frequency.setValueAtTime(midiToFrequency(rootMidi), when);
-    fifth.type = "sine";
-    fifth.frequency.setValueAtTime(midiToFrequency(fifthMidi), when);
-    air.type = "triangle";
-    air.frequency.setValueAtTime(midiToFrequency(ninthMidi), when);
-    air.detune.setValueAtTime(5, when);
-
-    rootGain.gain.setValueAtTime(0.16, when);
-    fifthGain.gain.setValueAtTime(0.08, when);
-    airGain.gain.setValueAtTime(0.035, when);
-
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(720, when);
-    filter.frequency.linearRampToValueAtTime(960, endTime);
-    filter.Q.value = 0.7;
-
-    output.gain.setValueAtTime(0.0001, when);
-    output.gain.linearRampToValueAtTime(0.16, when + 0.18);
-    output.gain.setValueAtTime(0.16, Math.max(when + 0.18, endTime - 0.42));
-    output.gain.exponentialRampToValueAtTime(0.0001, endTime);
-
-    lfo.type = "sine";
-    lfo.frequency.setValueAtTime(0.16, when);
-    lfoDepth.gain.setValueAtTime(24, when);
-
-    lfo.connect(lfoDepth);
-    lfoDepth.connect(filter.detune);
-
-    root.connect(rootGain);
-    rootGain.connect(filter);
-    fifth.connect(fifthGain);
-    fifthGain.connect(filter);
-    air.connect(airGain);
-    airGain.connect(filter);
-    filter.connect(output);
-    output.connect(this.masterGain);
-
-    root.start(when);
-    fifth.start(when);
-    air.start(when);
-    lfo.start(when);
-    root.stop(endTime + 0.04);
-    fifth.stop(endTime + 0.04);
-    air.stop(endTime + 0.04);
-    lfo.stop(endTime + 0.04);
   }
 
   private playMegaVoice(impact: number, pan: number, when: number): void {

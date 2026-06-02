@@ -3,6 +3,7 @@ import type { OverlayState, RootNoteName, ScaleModeName, SpawnPattern } from "./
 
 interface OverlayCallbacks {
   onStart: () => void;
+  onReplaySong: () => void;
   onRootChange: (value: RootNoteName) => void;
   onModeChange: (value: ScaleModeName) => void;
   onSpawnIntervalChange: (value: number) => void;
@@ -21,6 +22,9 @@ const ROOT_OPTIONS: RootNoteName[] = ["C", "C#", "D", "D#", "E", "F", "F#", "G",
 
 export class UIOverlay {
   private startCard!: HTMLDivElement;
+  private completionCard!: HTMLDivElement;
+  private completionTitle!: HTMLElement;
+  private completionMessage!: HTMLElement;
   private hudTop!: HTMLDivElement;
   private quickDock!: HTMLDivElement;
   private noteLayer!: HTMLDivElement;
@@ -100,6 +104,9 @@ export class UIOverlay {
     this.hudTop.classList.toggle("hidden", !state.hudVisible);
     this.quickDock.classList.toggle("hidden", !state.started);
     this.startCard.classList.toggle("hidden", state.started);
+    this.completionCard.classList.toggle("hidden", !state.songCompleted);
+    this.completionTitle.textContent = state.songCompletionTitle;
+    this.completionMessage.textContent = state.songCompletionMessage;
   }
 
   showNoteLabel(
@@ -178,8 +185,8 @@ export class UIOverlay {
                 <span>Formation clears</span>
               </div>
               <div class="status-card">
-                <strong data-layer-value>Kick Only</strong>
-                <span>Groove layer</span>
+                <strong data-layer-value>Groove 1</strong>
+                <span>Loop state</span>
               </div>
             </div>
 
@@ -239,7 +246,7 @@ export class UIOverlay {
               <li><strong>Click</strong> or tap the arena to wake audio if it has not started yet.</li>
               <li><strong>L</strong> toggles live mode. Roots map to <strong>Q 2 W 3 E R 5 T 6 Y 7 U I</strong> and modes map to <strong>A S D F G H</strong>.</li>
               <li><strong>Esc</strong> hides or shows these panels. <strong>P</strong> pauses, <strong>M</strong> mutes, and <strong>Shift+R</strong> resets while live mode is on.</li>
-              <li>Catch most of a special formation with your paddle to charge the groove meter and unlock new layers.</li>
+              <li>Catch most of a special formation with your paddle to charge the groove meter and push the song into higher groove levels.</li>
             </ul>
 
             <h2>Families</h2>
@@ -264,6 +271,15 @@ export class UIOverlay {
               <button type="button" data-start-button>Wake Audio and Play</button>
             </div>
           </div>
+
+          <div class="start-card hidden completion-card" data-completion-card>
+            <span class="eyebrow">Song Complete</span>
+            <h1 data-completion-title>Fade Reached</h1>
+            <p data-completion-message>The final one-shot has landed. Replay the song to run the whole arc again.</p>
+            <div class="button-row">
+              <button type="button" data-replay-button>Replay Song</button>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -271,6 +287,9 @@ export class UIOverlay {
     this.quickDock = this.query<HTMLDivElement>(".quick-dock");
     this.hudTop = this.query<HTMLDivElement>(".hud-top");
     this.startCard = this.query<HTMLDivElement>("[data-start-card]");
+    this.completionCard = this.query<HTMLDivElement>("[data-completion-card]");
+    this.completionTitle = this.query("[data-completion-title]");
+    this.completionMessage = this.query("[data-completion-message]");
     this.noteLayer = this.query<HTMLDivElement>("[data-note-layer]");
     this.objectCountValue = this.query("[data-object-count]");
     this.modeValue = this.query("[data-mode-value]");
@@ -298,6 +317,10 @@ export class UIOverlay {
 
     this.query<HTMLButtonElement>("[data-start-button]").addEventListener("click", () => {
       this.callbacks.onStart();
+    });
+
+    this.query<HTMLButtonElement>("[data-replay-button]").addEventListener("click", () => {
+      this.callbacks.onReplaySong();
     });
 
     this.rootSelect.addEventListener("change", () => {

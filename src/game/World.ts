@@ -49,6 +49,20 @@ interface PulseEffect {
   endAlpha: number;
 }
 
+interface BackdropFrame {
+  concrete: Mesh[];
+  lampMaterial: StandardMaterial;
+  reflectionMaterial: StandardMaterial;
+}
+
+interface BackdropLaser {
+  mesh: Mesh;
+  material: StandardMaterial;
+  direction: number;
+  baseX: number;
+  baseY: number;
+}
+
 const MEGA_COLORS = [
   "#000000",
   "#0000D7",
@@ -101,43 +115,167 @@ mat2 rot(float angle) {
   return mat2(c, -s, s, c);
 }
 
-float waveField(vec2 p, float time) {
-  float layerA = sin(p.x * 2.0 + time * 0.22);
-  float layerB = sin(p.y * 3.3 - time * 0.18 + layerA * 0.9);
-  float layerC = sin((p.x + p.y) * 2.6 + time * 0.12 + layerB * 0.8);
-  float layerD = sin(length(p * vec2(1.1, 0.8)) * 4.2 - time * 0.16);
-  return layerA * 0.28 + layerB * 0.26 + layerC * 0.24 + layerD * 0.22;
+float hash11(float p) {
+  return fract(sin(p * 127.1) * 43758.5453123);
+}
+
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  for (int i = 0; i < 5; i++) {
+    value += noise(p) * amplitude;
+    p = rot(0.45) * p * 2.04 + 4.7;
+    amplitude *= 0.52;
+  }
+  return value;
+}
+
+float stripe(float x, float width, float blur) {
+  return smoothstep(width + blur, width, abs(x));
 }
 
 void main(void) {
   vec2 uv = vUV * 2.0 - 1.0;
-  uv.x *= resolution.x / max(resolution.y, 1.0);
+  float aspect = resolution.x / max(resolution.y, 1.0);
+  uv.x *= aspect;
+
+  float groove = clamp(grooveIntensity, 0.0, 1.0);
+  float level2 = smoothstep(0.18, 0.34, groove);
+  float level3 = smoothstep(0.46, 0.66, groove);
+  float level4 = smoothstep(0.76, 0.96, groove);
   vec2 normalizedDirection = normalize(scrollDirection + vec2(0.0001, 0.0001));
-  float pulseWarp = beatPulse * (0.012 + grooveIntensity * 0.012);
-  vec2 flowUv = uv + scrollOffset * 2.6;
-  flowUv += vec2(-normalizedDirection.y, normalizedDirection.x) * sin(iTime * 0.18) * 0.06;
-  flowUv += normalize(uv + vec2(0.0001, 0.0001)) * pulseWarp;
-  vec2 detailUv = rot(0.75) * flowUv * 1.35;
-  vec2 wideUv = rot(-0.45) * flowUv * 0.72;
+  float forwardSpeed = mix(0.0, 0.18, level2) + level3 * 0.28 + level4 * 0.36;
+  float travel = iTime * forwardSpeed + dot(scrollOffset, normalizedDirection) * 0.8;
+  float beatJolt = beatPulse * (0.018 + level4 * 0.05);
+  vec2 cam = vec2(
+    sin(iTime * 0.41) * 0.02 * level2 + sin(iTime * 1.3) * 0.006,
+    sin(iTime * 0.83) * 0.015 * level2 + beatJolt
+  );
+  uv += cam;
 
-  float radial = length(uv);
-  float flow = waveField(wideUv, iTime) * 0.65 + waveField(detailUv, iTime + 12.0) * 0.35;
-  float bloom = smoothstep(1.35, 0.08, radial);
-  float centerGlow = smoothstep(0.95, 0.0, radial) * beatPulse;
-  float pulseRipple = (1.0 - smoothstep(0.18, 0.95, radial)) * beatPulse;
-  float pulseAmount = beatPulse * (0.18 + grooveIntensity * 0.22);
-  float softBands = smoothstep(-0.55, 0.75, flow);
-  float mist = smoothstep(-0.15, 0.95, flow + 0.18);
+  vec3 color = vec3(0.01, 0.012, 0.016);
+  vec3 fogColor = mix(vec3(0.028, 0.024, 0.02), vec3(0.018, 0.026, 0.034), level2);
+  fogColor = mix(fogColor, vec3(0.025, 0.032, 0.038), level3);
+  fogColor = mix(fogColor, vec3(0.06, 0.065, 0.074), beatPulse * 0.12 * level4);
 
-  vec3 base = vec3(0.03, 0.09, 0.14);
-  vec3 tide = vec3(0.06, 0.25, 0.34) * (0.14 + softBands * 0.3) * (0.75 + grooveIntensity * 0.42);
-  vec3 mistGlow = vec3(0.10, 0.34, 0.36) * mist * (0.18 + grooveIntensity * 0.1);
-  vec3 glow = vec3(0.98, 0.81, 0.44) * centerGlow * (0.04 + pulseAmount * 0.85);
-  vec3 ripple = vec3(0.42, 0.88, 0.84) * pulseRipple * (0.02 + pulseAmount * 0.4);
-  vec3 center = vec3(0.10, 0.45, 0.48) * bloom * (0.1 + grooveIntensity * 0.1 + beatPulse * 0.08);
+  float horizonY = -0.08 + level2 * 0.02;
+  float depth = 1.0 / max(uv.y + 1.18, 0.18);
+  vec2 world = vec2(uv.x * depth * 2.7, depth * 7.2 + travel * 5.2);
+  float corridorHalf = mix(2.3, 3.0, 0.35 + level2 * 0.2);
+  float wallMask = smoothstep(corridorHalf + 0.14, corridorHalf - 0.02, abs(world.x));
+  float floorMask = smoothstep(horizonY + 0.02, horizonY - 0.42, uv.y);
+  float ceilingMask = smoothstep(-0.92, -0.55, -uv.y);
 
-  vec3 color = base + tide * bloom + mistGlow * bloom + center + glow + ripple;
-  color *= 1.0 - smoothstep(0.75, 1.38, radial) * 0.65;
+  vec3 floorBase = vec3(0.016, 0.017, 0.019);
+  vec3 wallBase = vec3(0.032, 0.032, 0.035);
+  vec3 ceilingBase = vec3(0.022, 0.024, 0.026);
+
+  float pillarSpacing = 2.8;
+  float pillarPhase = fract(world.y / pillarSpacing);
+  float pillarBand = smoothstep(0.08, 0.0, abs(pillarPhase - 0.18));
+  float pillarEdge = stripe(abs(world.x) - (corridorHalf - 0.18), 0.18, 0.09);
+  float pillars = pillarBand * pillarEdge * wallMask;
+
+  float beamPhase = fract(world.y / 1.6 + 0.16);
+  float beamBand = smoothstep(0.12, 0.0, abs(beamPhase - 0.15));
+  float ceilingBeams = beamBand * ceilingMask * smoothstep(0.82, 0.24, abs(uv.x));
+
+  float concreteNoise = fbm(world * vec2(0.65, 0.22));
+  wallBase += vec3(concreteNoise * 0.06);
+  floorBase += vec3(fbm(world * vec2(0.9, 0.32)) * 0.04);
+
+  vec3 lampWarm = vec3(1.0, 0.58, 0.16);
+  vec3 lampCold = vec3(0.56, 0.76, 1.0);
+  vec3 laserColor = mix(vec3(0.0, 0.9, 0.88), vec3(0.48, 1.0, 0.72), 0.45);
+
+  float lampSpacing = 2.15;
+  float lampPulse = fract(world.y / lampSpacing + 0.12);
+  float lampBand = smoothstep(0.1, 0.0, abs(lampPulse - 0.14));
+  float overheadCone = smoothstep(0.82, 0.0, abs(uv.x) + max(0.0, uv.y + 0.22) * 0.65);
+  float amberFlicker = mix(0.65, 1.18, step(0.72, hash11(floor(iTime * 11.0))));
+  float warmLamp = lampBand * overheadCone * (1.0 - level2) * amberFlicker;
+  float coldLamp = lampBand * overheadCone * level2 * (0.35 + beatPulse * (0.9 + level3 * 0.8));
+
+  float floorReflect = smoothstep(-0.12, -0.88, uv.y) * smoothstep(1.45, 0.12, abs(uv.x));
+  float reflectionBreakup = 0.5 + 0.5 * fbm(vec2(world.x * 1.6, world.y * 0.7));
+
+  float crowdBand = smoothstep(0.16, -0.08, abs(uv.x));
+  float crowdNoise = fbm(vec2(uv.x * 9.0, 4.0 + iTime * 0.03));
+  float crowd = smoothstep(0.38, 0.82, crowdNoise) * smoothstep(horizonY - 0.1, horizonY + 0.08, uv.y) * crowdBand * level2;
+
+  float rain = 0.0;
+  vec2 rainUv = uv * vec2(1.4, 0.8) + vec2(travel * 0.02, -iTime * mix(1.7, 3.8, groove));
+  for (int i = 0; i < 3; i++) {
+    vec2 layerUv = rainUv * (1.0 + float(i) * 0.6);
+    vec2 cell = floor(layerUv * vec2(18.0, 10.0) + float(i) * 7.3);
+    float lane = hash21(cell);
+    float streakX = fract(layerUv.x * 18.0 + lane) - 0.5;
+    float streakY = fract(layerUv.y * 10.0 + lane * 3.0);
+    float streak = smoothstep(0.06, 0.0, abs(streakX)) * smoothstep(1.0, 0.15, streakY);
+    rain += streak * (0.22 + 0.2 * float(i));
+  }
+  rain *= 0.12 + groove * 0.24;
+
+  float laserSweepA = sin(world.y * 0.22 + iTime * 1.7) * (0.65 + level4 * 0.28);
+  float laserSweepB = sin(world.y * 0.19 - iTime * 1.45 + 1.4) * (0.55 + level4 * 0.32);
+  float laserA = stripe(uv.x - laserSweepA * 0.38, 0.012 + beatPulse * 0.012, 0.03) * level3;
+  float laserB = stripe(uv.x + laserSweepB * 0.34, 0.014 + beatPulse * 0.015, 0.035) * level3;
+  float laserFog = smoothstep(-0.48, 0.16, uv.y) * (laserA + laserB) * (0.35 + level4 * 0.9);
+
+  vec3 wallColor = wallBase;
+  wallColor += vec3(0.08, 0.09, 0.1) * pillars;
+  wallColor += lampWarm * warmLamp * 0.22;
+  wallColor += lampCold * coldLamp * 0.28;
+
+  vec3 ceilingColor = ceilingBase;
+  ceilingColor += vec3(0.09, 0.1, 0.12) * ceilingBeams;
+  ceilingColor += lampWarm * warmLamp * 0.4;
+  ceilingColor += lampCold * coldLamp * 0.5;
+
+  vec3 floorColor = floorBase;
+  floorColor += lampWarm * warmLamp * floorReflect * reflectionBreakup * 0.42;
+  floorColor += lampCold * coldLamp * floorReflect * reflectionBreakup * 0.6;
+  floorColor += laserColor * laserFog * floorReflect * 0.42;
+
+  color = mix(color, wallColor, wallMask * (1.0 - floorMask));
+  color = mix(color, ceilingColor, ceilingMask * 0.85);
+  color = mix(color, floorColor, floorMask);
+
+  color += laserColor * laserFog;
+  color += vec3(0.05, 0.08, 0.1) * crowd;
+
+  float smoke = fbm(vec2(world.x * 0.35, world.y * 0.12 - iTime * 0.08));
+  float haze = smoothstep(0.22, 0.92, smoke) * (0.18 + groove * 0.32);
+  color = mix(color, fogColor, haze * smoothstep(0.95, -0.35, uv.y));
+
+  color += rain * vec3(0.46, 0.52, 0.58);
+
+  float grime = fbm(uv * vec2(4.0, 7.2) + iTime * 0.05);
+  color *= 0.88 + grime * 0.16;
+
+  float scan = sin(vUV.y * resolution.y * 1.22) * 0.5 + 0.5;
+  color *= 0.92 + scan * 0.08;
+
+  float vignette = smoothstep(1.6, 0.38, length(vec2(uv.x * 0.82, uv.y * 1.08)));
+  color *= vignette;
+
+  float strobe = beatPulse * level4 * 0.38;
+  color += lampCold * strobe * 0.35 + laserColor * strobe * 0.22;
 
   gl_FragColor = vec4(color, 1.0);
 }
@@ -172,15 +310,18 @@ export class World {
   private backdropScrollDirection = new Vector2(0.78, -0.24);
   private backdropTargetScrollDirection = new Vector2(0.78, -0.24);
   private backdropScrollOffset = new Vector2(0, 0);
+  private backdropFrames: BackdropFrame[] = [];
+  private backdropLasers: BackdropLaser[] = [];
+  private cameraBasePosition = new Vector3(0, 0, -18);
   private playerWidth: number = GAME_CONFIG.playerWidth;
   private playerX = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true);
     this.scene = new Scene(this.engine);
-    this.scene.clearColor = new Color4(0.03, 0.09, 0.14, 1);
+    this.scene.clearColor = new Color4(0.015, 0.018, 0.022, 1);
 
-    this.camera = new FreeCamera("camera", new Vector3(0, 0, -18), this.scene);
+    this.camera = new FreeCamera("camera", this.cameraBasePosition.clone(), this.scene);
     this.camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
     this.camera.setTarget(Vector3.Zero());
 
@@ -232,6 +373,9 @@ export class World {
       this.backdropMaterial.setVector2("scrollDirection", this.backdropScrollDirection);
       this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
     }
+
+    this.syncBackdropArchitecture();
+    this.syncCameraMotion();
 
     this.scene.render();
   }
@@ -556,27 +700,135 @@ export class World {
     this.backdropMaterial.setVector2("scrollDirection", this.backdropScrollDirection);
     this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
     this.backdropPlane.material = this.backdropMaterial;
+    this.backdropPlane.visibility = 0.62;
 
-    const glowLeft = MeshBuilder.CreateDisc("backdrop-left", {
-      radius: 6.4,
-      tessellation: 48,
+    const fogBand = MeshBuilder.CreatePlane("backdrop-fog-band", {
+      width: 54,
+      height: 10,
     }, this.scene);
-    glowLeft.position.set(-7.5, 3.8, 7);
-    glowLeft.material = this.createFlatMaterial("backdrop-left-material", "#124f7d", 0.22);
+    fogBand.position.set(0, -6.8, 8);
+    fogBand.material = this.createFlatMaterial("backdrop-fog-band-material", "#0a1116", 0.42);
 
-    const glowRight = MeshBuilder.CreateDisc("backdrop-right", {
-      radius: 4.8,
-      tessellation: 48,
-    }, this.scene);
-    glowRight.position.set(8.6, -0.4, 7);
-    glowRight.material = this.createFlatMaterial("backdrop-right-material", "#2f7d78", 0.18);
+    const frameCount = 6;
+    for (let index = 0; index < frameCount; index += 1) {
+      const scale = 1 - index * 0.1;
+      const halfWidth = 10.5 * scale;
+      const halfHeight = 6.9 * scale;
+      const beamThickness = 0.9 * scale;
+      const pillarWidth = 1.18 * scale;
+      const frameZ = 8.75 + index * 0.06;
+      const concreteAlpha = 0.58 - index * 0.035;
+      const concreteMaterial = this.createFlatMaterial(
+        `backdrop-frame-${index}-concrete`,
+        index === 0 ? "#565961" : "#3d4148",
+        concreteAlpha,
+      );
 
-    const horizon = MeshBuilder.CreatePlane("horizon", {
-      width: 48,
-      height: 8,
+      const leftPillar = MeshBuilder.CreateBox(`backdrop-frame-${index}-left`, {
+        width: pillarWidth,
+        height: halfHeight * 2,
+        depth: 0.2,
+      }, this.scene);
+      leftPillar.position.set(-halfWidth + pillarWidth * 0.5, 0.2 - index * 0.08, frameZ);
+      leftPillar.material = concreteMaterial;
+
+      const rightPillar = MeshBuilder.CreateBox(`backdrop-frame-${index}-right`, {
+        width: pillarWidth,
+        height: halfHeight * 2,
+        depth: 0.2,
+      }, this.scene);
+      rightPillar.position.set(halfWidth - pillarWidth * 0.5, 0.2 - index * 0.08, frameZ);
+      rightPillar.material = concreteMaterial;
+
+      const topBeam = MeshBuilder.CreateBox(`backdrop-frame-${index}-top`, {
+        width: halfWidth * 2,
+        height: beamThickness,
+        depth: 0.2,
+      }, this.scene);
+      topBeam.position.set(0, halfHeight - beamThickness * 0.5 - index * 0.1, frameZ);
+      topBeam.material = concreteMaterial;
+
+      const insetLeft = MeshBuilder.CreateBox(`backdrop-frame-${index}-inset-left`, {
+        width: 0.38 * scale,
+        height: halfHeight * 1.6,
+        depth: 0.2,
+      }, this.scene);
+      insetLeft.position.set(-halfWidth + 2.6 * scale, 0.05 - index * 0.06, frameZ - 0.01);
+      insetLeft.material = concreteMaterial;
+
+      const insetRight = MeshBuilder.CreateBox(`backdrop-frame-${index}-inset-right`, {
+        width: 0.38 * scale,
+        height: halfHeight * 1.6,
+        depth: 0.2,
+      }, this.scene);
+      insetRight.position.set(halfWidth - 2.6 * scale, 0.05 - index * 0.06, frameZ - 0.01);
+      insetRight.material = concreteMaterial;
+
+      const lampMaterial = this.createFlatMaterial(
+        `backdrop-frame-${index}-lamp`,
+        index === 0 ? "#d07a2f" : "#5a7f9c",
+        0.22 + index * 0.025,
+      );
+      const lamp = MeshBuilder.CreatePlane(`backdrop-frame-${index}-lamp`, {
+        width: halfWidth * 0.9,
+        height: 0.22 * scale,
+      }, this.scene);
+      lamp.position.set(0, halfHeight - 1.05 * scale - index * 0.1, frameZ - 0.03);
+      lamp.material = lampMaterial;
+
+      const reflectionMaterial = this.createFlatMaterial(
+        `backdrop-frame-${index}-reflection`,
+        index === 0 ? "#9f6734" : "#315269",
+        0.1,
+      );
+      const reflection = MeshBuilder.CreatePlane(`backdrop-frame-${index}-reflection`, {
+        width: halfWidth * 1.55,
+        height: 0.52 * scale,
+      }, this.scene);
+      reflection.position.set(0, -halfHeight + 1.32 * scale, frameZ - 0.04);
+      reflection.material = reflectionMaterial;
+
+      this.backdropFrames.push({
+        concrete: [leftPillar, rightPillar, topBeam, insetLeft, insetRight],
+        lampMaterial,
+        reflectionMaterial,
+      });
+    }
+
+    const backWallMaterial = this.createFlatMaterial("backdrop-back-wall-material", "#474b52", 0.34);
+    const backWall = MeshBuilder.CreatePlane("backdrop-back-wall", {
+      width: 7.2,
+      height: 5.4,
     }, this.scene);
-    horizon.position.set(0, -7.2, 8);
-    horizon.material = this.createFlatMaterial("horizon-material", "#0d2442", 0.55);
+    backWall.position.set(0, 0.1, 9.38);
+    backWall.material = backWallMaterial;
+    this.backdropFrames.push({
+      concrete: [backWall],
+      lampMaterial: this.createFlatMaterial("backdrop-back-wall-dummy-lamp", "#000000", 0),
+      reflectionMaterial: this.createFlatMaterial("backdrop-back-wall-dummy-reflect", "#000000", 0),
+    });
+
+    for (const direction of [-1, 1]) {
+      const laserMaterial = this.createFlatMaterial(
+        `backdrop-laser-${direction > 0 ? "right" : "left"}`,
+        direction > 0 ? "#57ffe0" : "#7de86f",
+        0,
+      );
+      const laser = MeshBuilder.CreatePlane(`backdrop-laser-${direction > 0 ? "right" : "left"}`, {
+        width: 0.18,
+        height: 28,
+      }, this.scene);
+      laser.position.set(direction * 4.2, 0.2, 8.72);
+      laser.rotation.z = direction * 0.22;
+      laser.material = laserMaterial;
+      this.backdropLasers.push({
+        mesh: laser,
+        material: laserMaterial,
+        direction,
+        baseX: direction * 4.2,
+        baseY: 0.2,
+      });
+    }
   }
 
   private resizeBackdrop(): void {
@@ -593,6 +845,64 @@ export class World {
       "resolution",
       new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()),
     );
+  }
+
+  private syncBackdropArchitecture(): void {
+    const groove = this.backdropGrooveIntensity;
+    const level2 = clamp((groove - 0.18) / 0.24, 0, 1);
+    const level3 = clamp((groove - 0.46) / 0.2, 0, 1);
+    const level4 = clamp((groove - 0.76) / 0.2, 0, 1);
+    const amber = hex("#9f5218");
+    const steel = hex("#5e768c");
+    const laserA = hex("#57ffe0");
+    const laserB = hex("#7de86f");
+
+    this.backdropFrames.forEach((frame, index) => {
+      const visibilityRamp = clamp(0.22 + groove * 0.55 - index * 0.05, 0.16, 0.62);
+      frame.concrete.forEach((mesh) => {
+        mesh.visibility = visibilityRamp;
+      });
+
+      const lampColor = Color3.Lerp(amber, steel, level2);
+      frame.lampMaterial.diffuseColor = lampColor;
+      frame.lampMaterial.emissiveColor = lampColor.scale(0.34 + this.backdropBeatPulse * (0.32 + level3 * 0.24));
+      frame.lampMaterial.alpha = 0.2 + level2 * 0.1 + this.backdropBeatPulse * 0.08;
+
+      const reflectionColor = Color3.Lerp(hex("#6b431e"), hex("#2d4657"), level2);
+      frame.reflectionMaterial.diffuseColor = reflectionColor;
+      frame.reflectionMaterial.emissiveColor = reflectionColor.scale(0.14 + this.backdropBeatPulse * 0.12);
+      frame.reflectionMaterial.alpha = 0.06 + level2 * 0.05 + level3 * 0.04;
+    });
+
+    this.backdropLasers.forEach((laser, index) => {
+      const sweep = Math.sin(this.backdropTime * (1.4 + index * 0.22) + index * 1.4);
+      laser.mesh.rotation.z = laser.direction * (0.12 + level3 * 0.42 + sweep * 0.08);
+      laser.mesh.position.x = laser.baseX + laser.direction * sweep * 1.2;
+      laser.mesh.position.y = laser.baseY;
+      laser.material.diffuseColor = index === 0 ? laserA : laserB;
+      laser.material.emissiveColor = (index === 0 ? laserA : laserB).scale(
+        level3 * (0.3 + this.backdropBeatPulse * (0.7 + level4 * 0.8)),
+      );
+      laser.material.alpha = level3 * 0.3 + level4 * 0.28 + this.backdropBeatPulse * level4 * 0.18;
+      laser.mesh.visibility = level3;
+    });
+  }
+
+  private syncCameraMotion(): void {
+    const groove = this.backdropGrooveIntensity;
+    const drift = 0.16 + groove * 0.28;
+    const verticalDrift = 0.08 + groove * 0.16;
+    const beatLift = this.backdropBeatPulse * (0.08 + groove * 0.14);
+    this.camera.position.x =
+      this.cameraBasePosition.x +
+      Math.sin(this.backdropTime * 0.22) * drift +
+      Math.cos(this.backdropTime * 0.49) * drift * 0.28;
+    this.camera.position.y =
+      this.cameraBasePosition.y +
+      Math.sin(this.backdropTime * 0.31 + 1.3) * verticalDrift +
+      Math.cos(this.backdropTime * 0.18 + 0.4) * verticalDrift * 0.35 +
+      beatLift;
+    this.camera.rotation.z = Math.sin(this.backdropTime * 0.18) * (0.006 + groove * 0.012);
   }
 
   private createPlayerAvatar(): Mesh {
