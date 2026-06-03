@@ -99,6 +99,9 @@ export interface OverlayState {
   grooveTarget: number;
   grooveLevel: number;
   grooveLayerLabel: string;
+  grooveBoostIncoming: boolean;
+  grooveBoostTargetLevel: number | null;
+  grooveBoostIntensity: number;
   activeFormationCaught: number;
   activeFormationRequired: number;
   activeFormationVisible: boolean;

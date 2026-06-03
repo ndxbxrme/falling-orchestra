@@ -9,7 +9,7 @@ import { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { GAME_CONFIG, OBJECT_DEFINITIONS } from "./config";
-import type { ArenaBounds, MusicalObject, ObjectType, Surface } from "./types";
+import type { ArenaBounds, MusicalObject, ObjectType, Surface, SurfaceKind } from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -38,6 +38,22 @@ const lerpVector2 = (a: Vector2, b: Vector2, t: number): Vector2 =>
 
 const hex = (value: string): Color3 => Color3.FromHexString(value);
 
+const PLAYER_BAR_COLOR = "#77f6f2";
+const PLAYER_CORE_COLOR = "#f2f8ff";
+const PLAYER_METAL_COLOR = "#273543";
+const PLAYER_SHADOW_COLOR = "#101722";
+const PLAYER_WARN_COLOR = "#ff6b57";
+const PLAYER_RADAR_COLOR = "#2b8f97";
+const SIGNAL_RING_ALPHA = 0.78;
+const SIGNAL_TICK_ALPHA = 0.58;
+const SIGNAL_HALO_ALPHA = 0.22;
+const PLAYFIELD_RAIL_COLOR = "#7ee9ef";
+const PLAYFIELD_RAIL_DIM = "#243746";
+const PLAYFIELD_GUIDE_COLOR = "#6bdce6";
+const PLAYFIELD_WARN_COLOR = "#ff5a53";
+const BUMPER_CORE_COLOR = "#82f8ff";
+const BUMPER_DIM_COLOR = "#182430";
+
 interface PulseEffect {
   mesh: Mesh;
   material: StandardMaterial;
@@ -61,6 +77,19 @@ interface BackdropLaser {
   direction: number;
   baseX: number;
   baseY: number;
+}
+
+interface PlayfieldDecor {
+  rails: Mesh[];
+  railMaterials: StandardMaterial[];
+  centerline: Mesh;
+  centerlineMaterial: StandardMaterial;
+  centerTicks: Mesh[];
+  centerTickMaterials: StandardMaterial[];
+  radialRings: Mesh[];
+  radialMaterials: StandardMaterial[];
+  lowerGuides: Mesh[];
+  lowerGuideMaterials: StandardMaterial[];
 }
 
 const MEGA_COLORS = [
@@ -298,7 +327,6 @@ export class World {
   private pulses: PulseEffect[] = [];
   private nextObjectId = 0;
   private objectMaterials = new Map<ObjectType, { outer: StandardMaterial; inner: StandardMaterial }>();
-  private playerMaterial: StandardMaterial;
   private playerCoreMaterial: StandardMaterial;
   private playerMesh: Mesh;
   private playerSurface: Surface;
@@ -312,6 +340,7 @@ export class World {
   private backdropScrollOffset = new Vector2(0, 0);
   private backdropFrames: BackdropFrame[] = [];
   private backdropLasers: BackdropLaser[] = [];
+  private playfieldDecor?: PlayfieldDecor;
   private cameraBasePosition = new Vector3(0, 0, -18);
   private playerWidth: number = GAME_CONFIG.playerWidth;
   private playerX = 0;
@@ -325,7 +354,6 @@ export class World {
     this.camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
     this.camera.setTarget(Vector3.Zero());
 
-    this.playerMaterial = this.createFlatMaterial("player-material", "#69f5d8");
     this.playerCoreMaterial = this.createFlatMaterial("player-core", "#d7fff6");
 
     for (const definition of Object.values(OBJECT_DEFINITIONS)) {
@@ -336,6 +364,7 @@ export class World {
     }
 
     this.createBackdrop();
+    this.createPlayfieldDecor();
     this.playerMesh = this.createPlayerAvatar();
     this.playerSurface = this.createPlayerSurface();
     this.resize();
@@ -375,6 +404,7 @@ export class World {
     }
 
     this.syncBackdropArchitecture();
+    this.syncPlayfieldDecor();
     this.syncCameraMotion();
 
     this.scene.render();
@@ -444,7 +474,7 @@ export class World {
     this.updateSurfaceMesh(this.playerSurface, 0.34);
 
     this.playerMesh.position.x = this.playerX;
-    this.playerMesh.position.y = y - 0.56;
+    this.playerMesh.position.y = y - 0.08;
   }
 
   setCameraBeatPulse(pulse: number, grooveIntensity: number): void {
@@ -477,29 +507,22 @@ export class World {
       return null;
     }
 
-    const mesh = MeshBuilder.CreateDisc(`object-${this.nextObjectId}`, {
-      radius,
-      tessellation: 34,
-    }, this.scene);
-    mesh.material =
+    const outerMaterial =
       type === "mega"
         ? this.createFlatMaterial(`mega-${this.nextObjectId}-outer`, definition.color)
         : formationColor
           ? this.createFlatMaterial(`special-${this.nextObjectId}-outer`, formationColor)
-          : materialSet.outer;
-    mesh.position.z = 0;
-
-    const coreMesh = MeshBuilder.CreateDisc(`object-core-${this.nextObjectId}`, {
-      radius: radius * 0.55,
-      tessellation: 24,
-    }, this.scene);
-    coreMesh.material =
+          : this.createFlatMaterial(`${type}-${this.nextObjectId}-outer`, definition.color);
+    const innerMaterial =
       type === "mega"
         ? this.createFlatMaterial(`mega-${this.nextObjectId}-core`, definition.glowColor)
         : formationColor
           ? this.createFlatMaterial(`special-${this.nextObjectId}-core`, "#fff9dc")
-          : materialSet.inner;
-    coreMesh.position.z = -0.06;
+          : this.createFlatMaterial(`${type}-${this.nextObjectId}-core`, definition.glowColor);
+
+    const visual = this.createSignalBallVisual(`object-${this.nextObjectId}`, radius, outerMaterial, innerMaterial);
+    const mesh = visual.outer;
+    const coreMesh = visual.core;
 
     const object: MusicalObject = {
       id: this.nextObjectId += 1,
@@ -544,18 +567,8 @@ export class World {
     object.specialCaught = true;
     object.pulse = Math.max(object.pulse, 0.65);
 
-    const outerMaterial = object.mesh.material;
-    const coreMaterial = object.coreMesh.material;
-
-    if (outerMaterial instanceof StandardMaterial) {
-      outerMaterial.diffuseColor = hex("#69f5d8");
-      outerMaterial.emissiveColor = hex("#69f5d8");
-    }
-
-    if (coreMaterial instanceof StandardMaterial) {
-      coreMaterial.diffuseColor = hex("#ecfffa");
-      coreMaterial.emissiveColor = hex("#ecfffa");
-    }
+    this.tintMeshMaterials(object.mesh, "#69f5d8");
+    this.tintMeshMaterials(object.coreMesh, "#ecfffa");
   }
 
   update(
@@ -847,6 +860,137 @@ export class World {
     );
   }
 
+  private createPlayfieldDecor(): void {
+    const rails: Mesh[] = [];
+    const railMaterials: StandardMaterial[] = [];
+    const centerTicks: Mesh[] = [];
+    const centerTickMaterials: StandardMaterial[] = [];
+    const radialRings: Mesh[] = [];
+    const radialMaterials: StandardMaterial[] = [];
+    const lowerGuides: Mesh[] = [];
+    const lowerGuideMaterials: StandardMaterial[] = [];
+
+    for (const direction of [-1, 1]) {
+      const outerRail = MeshBuilder.CreatePlane(`playfield-outer-rail-${direction}`, {
+        width: 0.2,
+        height: 14.6,
+      }, this.scene);
+      const outerRailMaterial = this.createFlatMaterial(
+        `playfield-outer-rail-material-${direction}`,
+        PLAYFIELD_RAIL_DIM,
+        0.34,
+      );
+      outerRail.material = outerRailMaterial;
+      outerRail.position.set(direction * 11.9, 0.2, 1.6);
+      rails.push(outerRail);
+      railMaterials.push(outerRailMaterial);
+
+      const innerRail = MeshBuilder.CreatePlane(`playfield-inner-rail-${direction}`, {
+        width: 0.08,
+        height: 14.2,
+      }, this.scene);
+      const innerRailMaterial = this.createFlatMaterial(
+        `playfield-inner-rail-material-${direction}`,
+        PLAYFIELD_RAIL_COLOR,
+        0.74,
+      );
+      innerRail.material = innerRailMaterial;
+      innerRail.position.set(direction * 11.5, 0.2, 1.56);
+      rails.push(innerRail);
+      railMaterials.push(innerRailMaterial);
+
+      for (let index = 0; index < 5; index += 1) {
+        const tick = MeshBuilder.CreatePlane(`playfield-rail-tick-${direction}-${index}`, {
+          width: 0.24,
+          height: 0.05,
+        }, this.scene);
+        const tickMaterial = this.createFlatMaterial(
+          `playfield-rail-tick-material-${direction}-${index}`,
+          index === 2 ? PLAYFIELD_WARN_COLOR : PLAYFIELD_GUIDE_COLOR,
+          0.42,
+        );
+        tick.material = tickMaterial;
+        tick.position.set(direction * 11.02, 4.6 - index * 2.3, 1.52);
+        rails.push(tick);
+        railMaterials.push(tickMaterial);
+      }
+    }
+
+    const centerline = MeshBuilder.CreatePlane("playfield-centerline", {
+      width: 0.03,
+      height: 14.8,
+    }, this.scene);
+    const centerlineMaterial = this.createFlatMaterial("playfield-centerline-material", PLAYFIELD_WARN_COLOR, 0.22);
+    centerline.material = centerlineMaterial;
+    centerline.position.set(0, 0.38, 1.5);
+
+    for (let index = 0; index < 10; index += 1) {
+      const tick = MeshBuilder.CreatePlane(`playfield-center-tick-${index}`, {
+        width: index % 2 === 0 ? 0.22 : 0.1,
+        height: 0.03,
+      }, this.scene);
+      const tickMaterial = this.createFlatMaterial(
+        `playfield-center-tick-material-${index}`,
+        index === 4 ? PLAYFIELD_WARN_COLOR : PLAYFIELD_GUIDE_COLOR,
+        index === 4 ? 0.42 : 0.26,
+      );
+      tick.material = tickMaterial;
+      tick.position.set(0, 6.2 - index * 1.28, 1.52);
+      centerTicks.push(tick);
+      centerTickMaterials.push(tickMaterial);
+    }
+
+    for (let index = 0; index < 4; index += 1) {
+      const ring = MeshBuilder.CreateTorus(`playfield-radial-ring-${index}`, {
+        diameter: 4.8 + index * 2.05,
+        thickness: 0.03,
+        tessellation: 72,
+      }, this.scene);
+      const ringMaterial = this.createFlatMaterial(
+        `playfield-radial-ring-material-${index}`,
+        index === 0 ? PLAYFIELD_RAIL_COLOR : PLAYFIELD_GUIDE_COLOR,
+        0.14 - index * 0.02,
+      );
+      ring.material = ringMaterial;
+      ring.rotation.x = Math.PI * 0.5;
+      ring.position.set(0, -6.55, 1.42 - index * 0.01);
+      radialRings.push(ring);
+      radialMaterials.push(ringMaterial);
+    }
+
+    for (const direction of [-1, 1]) {
+      for (let index = 0; index < 3; index += 1) {
+        const guide = MeshBuilder.CreatePlane(`playfield-lower-guide-${direction}-${index}`, {
+          width: 2.2 + index * 1.1,
+          height: 0.03,
+        }, this.scene);
+        const guideMaterial = this.createFlatMaterial(
+          `playfield-lower-guide-material-${direction}-${index}`,
+          PLAYFIELD_GUIDE_COLOR,
+          0.16 - index * 0.025,
+        );
+        guide.material = guideMaterial;
+        guide.position.set(direction * (3.2 + index * 1.05), -6.3 + index * 0.34, 1.38 - index * 0.01);
+        guide.rotation.z = direction * (0.18 + index * 0.06);
+        lowerGuides.push(guide);
+        lowerGuideMaterials.push(guideMaterial);
+      }
+    }
+
+    this.playfieldDecor = {
+      rails,
+      railMaterials,
+      centerline,
+      centerlineMaterial,
+      centerTicks,
+      centerTickMaterials,
+      radialRings,
+      radialMaterials,
+      lowerGuides,
+      lowerGuideMaterials,
+    };
+  }
+
   private syncBackdropArchitecture(): void {
     const groove = this.backdropGrooveIntensity;
     const level2 = clamp((groove - 0.18) / 0.24, 0, 1);
@@ -888,6 +1032,44 @@ export class World {
     });
   }
 
+  private syncPlayfieldDecor(): void {
+    if (!this.playfieldDecor) {
+      return;
+    }
+
+    const groove = this.backdropGrooveIntensity;
+    const beat = this.backdropBeatPulse;
+    const grooveLift = 0.22 + groove * 0.38;
+
+    this.playfieldDecor.railMaterials.forEach((material, index) => {
+      const accent = index % 7 === 0 ? 0.18 : 0.08;
+      const baseAlpha = index % 7 === 1 ? 0.78 : index % 7 === 0 ? 0.48 : 0.34;
+      material.alpha = clamp(baseAlpha + groove * 0.12 + beat * accent, 0.18, 0.92);
+      material.emissiveColor = material.diffuseColor.scale(0.42 + grooveLift + beat * (accent + 0.06));
+    });
+
+    this.playfieldDecor.centerlineMaterial.alpha = 0.24 + groove * 0.14 + beat * 0.1;
+    this.playfieldDecor.centerlineMaterial.emissiveColor = this.playfieldDecor.centerlineMaterial.diffuseColor.scale(
+      0.34 + groove * 0.58 + beat * 0.36,
+    );
+
+    this.playfieldDecor.centerTickMaterials.forEach((material, index) => {
+      const pulse = index === 4 ? 0.26 : 0.1;
+      material.alpha = index === 4 ? 0.52 : 0.34;
+      material.emissiveColor = material.diffuseColor.scale(0.32 + groove * 0.28 + beat * (pulse + 0.06));
+    });
+
+    this.playfieldDecor.radialMaterials.forEach((material, index) => {
+      material.alpha = clamp(0.2 + groove * 0.08 - index * 0.025 + beat * 0.04, 0.08, 0.34);
+      material.emissiveColor = material.diffuseColor.scale(0.22 + groove * 0.28 + beat * 0.08);
+    });
+
+    this.playfieldDecor.lowerGuideMaterials.forEach((material, index) => {
+      material.alpha = clamp(0.18 + groove * 0.07 - index * 0.018 + beat * 0.03, 0.06, 0.28);
+      material.emissiveColor = material.diffuseColor.scale(0.18 + groove * 0.22 + beat * 0.06);
+    });
+  }
+
   private syncCameraMotion(): void {
     const groove = this.backdropGrooveIntensity;
     const drift = 0.16 + groove * 0.28;
@@ -907,19 +1089,117 @@ export class World {
 
   private createPlayerAvatar(): Mesh {
     const avatar = MeshBuilder.CreateDisc("player-avatar", {
-      radius: 0.42,
+      radius: 0.34,
       tessellation: 32,
     }, this.scene);
-    avatar.material = this.playerMaterial;
+    avatar.material = this.createFlatMaterial("player-hub-shell", PLAYER_METAL_COLOR, 0.96);
     avatar.position.z = -0.12;
 
+    const bar = MeshBuilder.CreatePlane("player-fader-bar", {
+      width: 3.15,
+      height: 0.28,
+    }, this.scene);
+    bar.parent = avatar;
+    bar.material = this.createFlatMaterial("player-fader-bar-material", PLAYER_BAR_COLOR, 0.9);
+    bar.position.set(0, 0, 0.02);
+
+    const barShadow = MeshBuilder.CreatePlane("player-fader-shadow", {
+      width: 3.35,
+      height: 0.52,
+    }, this.scene);
+    barShadow.parent = avatar;
+    barShadow.material = this.createFlatMaterial("player-fader-shadow-material", PLAYER_SHADOW_COLOR, 0.34);
+    barShadow.position.set(0, -0.02, 0.09);
+
+    const leftCap = MeshBuilder.CreateBox("player-left-cap", {
+      width: 0.58,
+      height: 0.44,
+      depth: 0.14,
+    }, this.scene);
+    leftCap.parent = avatar;
+    leftCap.material = this.createFlatMaterial("player-left-cap-material", PLAYER_METAL_COLOR);
+    leftCap.position.set(-1.42, 0, -0.02);
+
+    const rightCap = leftCap.clone("player-right-cap");
+    rightCap.parent = avatar;
+    rightCap.position.x = 1.42;
+
+    const leftWing = MeshBuilder.CreatePlane("player-left-wing", {
+      width: 0.82,
+      height: 0.32,
+    }, this.scene);
+    leftWing.parent = avatar;
+    leftWing.material = this.createFlatMaterial("player-left-wing-material", "#3fd7df", 0.82);
+    leftWing.position.set(-0.68, 0.02, -0.01);
+    leftWing.rotation.z = 0.18;
+
+    const rightWing = leftWing.clone("player-right-wing");
+    rightWing.parent = avatar;
+    rightWing.position.x = 0.68;
+    rightWing.rotation.z = -0.18;
+
+    const leftCut = MeshBuilder.CreatePlane("player-left-cut", {
+      width: 0.34,
+      height: 0.06,
+    }, this.scene);
+    leftCut.parent = avatar;
+    leftCut.material = this.createFlatMaterial("player-left-cut-material", PLAYER_SHADOW_COLOR, 0.92);
+    leftCut.position.set(-0.72, 0.05, -0.04);
+    leftCut.rotation.z = 0.18;
+
+    const rightCut = leftCut.clone("player-right-cut");
+    rightCut.parent = avatar;
+    rightCut.position.x = 0.72;
+    rightCut.rotation.z = -0.18;
+
     const inner = MeshBuilder.CreateDisc("player-avatar-core", {
-      radius: 0.2,
+      radius: 0.16,
       tessellation: 20,
     }, this.scene);
     inner.material = this.playerCoreMaterial;
     inner.parent = avatar;
     inner.position.z = -0.06;
+
+    const outerHubRing = MeshBuilder.CreateTorus("player-hub-ring", {
+      diameter: 0.58,
+      thickness: 0.045,
+      tessellation: 40,
+    }, this.scene);
+    outerHubRing.parent = avatar;
+    outerHubRing.rotation.x = Math.PI * 0.5;
+    outerHubRing.position.z = -0.08;
+    outerHubRing.material = this.createFlatMaterial("player-hub-ring-material", PLAYER_CORE_COLOR, 0.7);
+
+    const radarArc = MeshBuilder.CreateDisc("player-radar-arc", {
+      radius: 0.92,
+      arc: 0.54,
+      tessellation: 48,
+    }, this.scene);
+    radarArc.parent = avatar;
+    radarArc.material = this.createFlatMaterial("player-radar-arc-material", PLAYER_RADAR_COLOR, 0.18);
+    radarArc.rotation.z = Math.PI;
+    radarArc.position.set(0, 0.14, 0.12);
+    radarArc.scaling.y = 0.1;
+
+    const leftModule = MeshBuilder.CreatePlane("player-left-module", {
+      width: 0.16,
+      height: 0.08,
+    }, this.scene);
+    leftModule.parent = avatar;
+    leftModule.material = this.createFlatMaterial("player-left-module-material", PLAYER_WARN_COLOR, 0.92);
+    leftModule.position.set(-1.15, 0.16, -0.06);
+
+    const rightModule = leftModule.clone("player-right-module");
+    rightModule.parent = avatar;
+    rightModule.position.x = 1.15;
+
+    const spine = MeshBuilder.CreatePlane("player-spine", {
+      width: 0.08,
+      height: 0.62,
+    }, this.scene);
+    spine.parent = avatar;
+    spine.material = this.createFlatMaterial("player-spine-material", "#3c4b5c", 0.88);
+    spine.position.set(0, -0.12, 0.01);
 
     return avatar;
   }
@@ -935,11 +1215,105 @@ export class World {
       musical: true,
       transpose: 0,
       color: "#69f5d8",
-      mesh: this.createSurfaceMesh("player-surface", "#69f5d8"),
     };
 
     this.updateSurfaceMesh(surface, 0.34);
     return surface;
+  }
+
+  private createSignalBallVisual(
+    name: string,
+    radius: number,
+    outerMaterial: StandardMaterial,
+    coreMaterial: StandardMaterial,
+  ): { outer: Mesh; core: Mesh } {
+    const outer = MeshBuilder.CreateTorus(`${name}-outer-ring`, {
+      diameter: radius * 2,
+      thickness: Math.max(0.04, radius * 0.11),
+      tessellation: 40,
+    }, this.scene);
+    outer.rotation.x = Math.PI * 0.5;
+    outer.material = outerMaterial;
+    outer.visibility = SIGNAL_RING_ALPHA;
+
+    const reticleRing = MeshBuilder.CreateTorus(`${name}-reticle-ring`, {
+      diameter: radius * 1.34,
+      thickness: Math.max(0.02, radius * 0.05),
+      tessellation: 32,
+    }, this.scene);
+    reticleRing.parent = outer;
+    reticleRing.rotation.x = Math.PI * 0.5;
+    reticleRing.position.z = 0.02;
+    reticleRing.material = this.createFlatMaterial(`${name}-reticle-material`, outerMaterial.diffuseColor.toHexString(), 0.34);
+
+    for (const [index, angle] of [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5].entries()) {
+      const tick = MeshBuilder.CreatePlane(`${name}-tick-${index}`, {
+        width: radius * 0.44,
+        height: Math.max(0.02, radius * 0.06),
+      }, this.scene);
+      tick.parent = outer;
+      tick.material = this.createFlatMaterial(`${name}-tick-material-${index}`, outerMaterial.diffuseColor.toHexString(), SIGNAL_TICK_ALPHA);
+      tick.position.set(Math.cos(angle) * radius * 1.08, Math.sin(angle) * radius * 1.08, 0.03);
+      tick.rotation.z = angle;
+    }
+
+    const core = MeshBuilder.CreateDisc(`${name}-core`, {
+      radius: radius * 0.54,
+      tessellation: 28,
+    }, this.scene);
+    core.material = coreMaterial;
+    core.position.z = -0.06;
+
+    const halo = MeshBuilder.CreateDisc(`${name}-halo`, {
+      radius: radius * 0.88,
+      tessellation: 28,
+    }, this.scene);
+    halo.parent = core;
+    halo.material = this.createFlatMaterial(`${name}-halo-material`, coreMaterial.diffuseColor.toHexString(), SIGNAL_HALO_ALPHA);
+    halo.position.z = 0.03;
+
+    const centerDot = MeshBuilder.CreateDisc(`${name}-center-dot`, {
+      radius: radius * 0.18,
+      tessellation: 20,
+    }, this.scene);
+    centerDot.parent = core;
+    centerDot.material = this.createFlatMaterial(`${name}-center-dot-material`, "#f8fffd", 0.96);
+    centerDot.position.z = -0.02;
+
+    const leftCross = MeshBuilder.CreatePlane(`${name}-cross-left`, {
+      width: radius * 0.28,
+      height: Math.max(0.018, radius * 0.04),
+    }, this.scene);
+    leftCross.parent = core;
+    leftCross.material = this.createFlatMaterial(`${name}-cross-left-material`, coreMaterial.diffuseColor.toHexString(), 0.46);
+    leftCross.position.set(-radius * 0.82, 0, 0.02);
+
+    const rightCross = leftCross.clone(`${name}-cross-right`);
+    rightCross.parent = core;
+    rightCross.position.x = radius * 0.82;
+
+    const topCross = MeshBuilder.CreatePlane(`${name}-cross-top`, {
+      width: Math.max(0.018, radius * 0.04),
+      height: radius * 0.28,
+    }, this.scene);
+    topCross.parent = core;
+    topCross.material = this.createFlatMaterial(`${name}-cross-top-material`, coreMaterial.diffuseColor.toHexString(), 0.46);
+    topCross.position.set(0, radius * 0.82, 0.02);
+
+    const bottomCross = topCross.clone(`${name}-cross-bottom`);
+    bottomCross.parent = core;
+    bottomCross.position.y = -radius * 0.82;
+
+    outer.metadata = {
+      tintMaterials: [outerMaterial, reticleRing.material, ...outer.getChildMeshes().map((child) => child.material).filter((material): material is StandardMaterial => material instanceof StandardMaterial)],
+    };
+    core.metadata = {
+      tintMaterials: [coreMaterial, halo.material, leftCross.material, rightCross.material, topCross.material, bottomCross.material].filter(
+        (material): material is StandardMaterial => material instanceof StandardMaterial,
+      ),
+    };
+
+    return { outer, core };
   }
 
   private rebuildBaseSurfaces(): void {
@@ -967,7 +1341,7 @@ export class World {
       musical: false,
       transpose: 0,
       color: "#1d4566",
-      mesh: this.createSurfaceMesh("left-wall", "#1d4566"),
+      mesh: this.createSurfaceMesh("left-wall", "#1d4566", "wall"),
     };
 
     const rightWall: Surface = {
@@ -979,7 +1353,7 @@ export class World {
       musical: false,
       transpose: 0,
       color: "#1d4566",
-      mesh: this.createSurfaceMesh("right-wall", "#1d4566"),
+      mesh: this.createSurfaceMesh("right-wall", "#1d4566", "wall"),
     };
 
     const leftSlope: Surface = {
@@ -991,7 +1365,7 @@ export class World {
       musical: true,
       transpose: 5,
       color: "#3e6b92",
-      mesh: this.createSurfaceMesh("left-slope", "#3e6b92"),
+      mesh: this.createSurfaceMesh("left-slope", "#3e6b92", "slope"),
     };
 
     const rightSlope: Surface = {
@@ -1003,7 +1377,7 @@ export class World {
       musical: true,
       transpose: 7,
       color: "#3e6b92",
-      mesh: this.createSurfaceMesh("right-slope", "#3e6b92"),
+      mesh: this.createSurfaceMesh("right-slope", "#3e6b92", "slope"),
     };
 
     this.baseSurfaces = [leftWall, rightWall, leftSlope, rightSlope];
@@ -1230,11 +1604,78 @@ export class World {
     }
   }
 
-  private createSurfaceMesh(name: string, color: string): Mesh {
-    const mesh = MeshBuilder.CreatePlane(`${name}-mesh`, { width: 1, height: 1 }, this.scene);
-    mesh.material = this.createFlatMaterial(`${name}-material`, color, 0.9);
-    mesh.position.z = 0.2;
-    return mesh;
+  private createSurfaceMesh(name: string, color: string, kind: SurfaceKind): Mesh {
+    const root = MeshBuilder.CreatePlane(`${name}-mesh`, { width: 1, height: 1 }, this.scene);
+    root.material = this.createFlatMaterial(`${name}-root-material`, color, 0.03);
+    root.position.z = 0.2;
+
+    const housing = MeshBuilder.CreatePlane(`${name}-housing`, { width: 1, height: 1 }, this.scene);
+    housing.parent = root;
+    housing.position.z = -0.02;
+    housing.scaling.set(kind === "wall" ? 1.02 : 1.01, kind === "wall" ? 0.86 : 0.82, 1);
+    housing.material = this.createFlatMaterial(`${name}-housing-material`, PLAYFIELD_RAIL_DIM, 0.34);
+
+    const glowAura = MeshBuilder.CreatePlane(`${name}-glow`, { width: 1, height: 1 }, this.scene);
+    glowAura.parent = root;
+    glowAura.position.z = 0.01;
+    glowAura.scaling.set(kind === "wall" ? 1.0 : 0.98, kind === "wall" ? 0.22 : 0.26, 1);
+    glowAura.material = this.createFlatMaterial(`${name}-glow-material`, PLAYFIELD_GUIDE_COLOR, 0.18);
+
+    const beam = MeshBuilder.CreatePlane(`${name}-beam`, { width: 1, height: 1 }, this.scene);
+    beam.parent = root;
+    beam.position.z = 0.02;
+    beam.scaling.set(kind === "wall" ? 0.98 : 0.96, kind === "wall" ? 0.06 : 0.08, 1);
+    beam.material = this.createFlatMaterial(
+      `${name}-beam-material`,
+      kind === "wall" ? PLAYFIELD_RAIL_COLOR : BUMPER_CORE_COLOR,
+      0.9,
+    );
+
+    const spine = MeshBuilder.CreatePlane(`${name}-spine`, { width: 1, height: 1 }, this.scene);
+    spine.parent = root;
+    spine.position.z = 0.015;
+    spine.scaling.set(kind === "wall" ? 0.96 : 0.9, kind === "wall" ? 0.12 : 0.16, 1);
+    spine.material = this.createFlatMaterial(
+      `${name}-spine-material`,
+      kind === "wall" ? "#0f1e29" : BUMPER_DIM_COLOR,
+      0.82,
+    );
+
+    const lowerAssembly = MeshBuilder.CreatePlane(`${name}-lower-assembly`, { width: 1, height: 1 }, this.scene);
+    lowerAssembly.parent = root;
+    lowerAssembly.position.set(-0.39, 0, 0.03);
+    lowerAssembly.scaling.set(kind === "wall" ? 0.18 : 0.22, kind === "wall" ? 0.42 : 0.48, 1);
+    lowerAssembly.material = this.createFlatMaterial(`${name}-lower-assembly-material`, "#10202b", 0.9);
+
+    const lowerGlow = MeshBuilder.CreatePlane(`${name}-lower-glow`, { width: 1, height: 1 }, this.scene);
+    lowerGlow.parent = root;
+    lowerGlow.position.set(-0.39, 0, 0.04);
+    lowerGlow.scaling.set(kind === "wall" ? 0.06 : 0.08, kind === "wall" ? 0.3 : 0.34, 1);
+    lowerGlow.material = this.createFlatMaterial(
+      `${name}-lower-glow-material`,
+      kind === "wall" ? PLAYFIELD_RAIL_COLOR : BUMPER_CORE_COLOR,
+      0.84,
+    );
+
+    const warnPlate = MeshBuilder.CreatePlane(`${name}-warn-plate`, { width: 1, height: 1 }, this.scene);
+    warnPlate.parent = root;
+    warnPlate.position.set(-0.31, kind === "wall" ? 0.13 : 0.15, 0.035);
+    warnPlate.scaling.set(0.12, 0.08, 1);
+    warnPlate.material = this.createFlatMaterial(`${name}-warn-plate-material`, PLAYFIELD_WARN_COLOR, 0.95);
+
+    const accentLeft = MeshBuilder.CreatePlane(`${name}-accent-left`, { width: 1, height: 1 }, this.scene);
+    accentLeft.parent = root;
+    accentLeft.position.set(-0.27, kind === "wall" ? -0.12 : -0.15, 0.035);
+    accentLeft.scaling.set(0.16, 0.02, 1);
+    accentLeft.material = this.createFlatMaterial(`${name}-accent-left-material`, "#d5fbff", 0.66);
+
+    const accentRight = MeshBuilder.CreatePlane(`${name}-accent-right`, { width: 1, height: 1 }, this.scene);
+    accentRight.parent = root;
+    accentRight.position.set(-0.18, kind === "wall" ? -0.18 : -0.2, 0.035);
+    accentRight.scaling.set(0.22, 0.018, 1);
+    accentRight.material = this.createFlatMaterial(`${name}-accent-right-material`, PLAYFIELD_GUIDE_COLOR, 0.54);
+
+    return root;
   }
 
   private updateSurfaceMesh(surface: Surface, thickness: number): void {
@@ -1294,22 +1735,12 @@ export class World {
   }
 
   private updateMegaAppearance(object: MusicalObject): void {
-    const outerMaterial = object.mesh.material;
-    const coreMaterial = object.coreMesh.material;
     const color = this.getMegaPaletteColor(object.age);
     const nextColor = this.getMegaPaletteColor(object.age + 0.08);
     object.color = color;
     object.glowColor = nextColor;
-
-    if (outerMaterial instanceof StandardMaterial) {
-      outerMaterial.diffuseColor = hex(color);
-      outerMaterial.emissiveColor = hex(color);
-    }
-
-    if (coreMaterial instanceof StandardMaterial) {
-      coreMaterial.diffuseColor = hex(nextColor);
-      coreMaterial.emissiveColor = hex(nextColor);
-    }
+    this.tintMeshMaterials(object.mesh, color);
+    this.tintMeshMaterials(object.coreMesh, nextColor);
   }
 
   private getMegaPaletteColor(age: number): string {
@@ -1335,5 +1766,23 @@ export class World {
     material.disableLighting = true;
     material.alpha = alpha;
     return material;
+  }
+
+  private tintMeshMaterials(mesh: Mesh, color: string): void {
+    const materials = this.getTintMaterials(mesh);
+    const tint = hex(color);
+    for (const material of materials) {
+      material.diffuseColor = tint;
+      material.emissiveColor = tint;
+    }
+  }
+
+  private getTintMaterials(mesh: Mesh): StandardMaterial[] {
+    const metadata = mesh.metadata as { tintMaterials?: StandardMaterial[] } | undefined;
+    if (metadata?.tintMaterials?.length) {
+      return metadata.tintMaterials;
+    }
+
+    return mesh.material instanceof StandardMaterial ? [mesh.material] : [];
   }
 }

@@ -27,6 +27,9 @@ export class UIOverlay {
   private completionMessage!: HTMLElement;
   private hudTop!: HTMLDivElement;
   private quickDock!: HTMLDivElement;
+  private grooveBoostAlert!: HTMLDivElement;
+  private grooveBoostText!: HTMLElement;
+  private hypeLayer!: HTMLDivElement;
   private noteLayer!: HTMLDivElement;
   private objectCountValue!: HTMLElement;
   private modeValue!: HTMLElement;
@@ -51,6 +54,8 @@ export class UIOverlay {
   private liveToggle!: HTMLInputElement;
   private freezeToggle!: HTMLInputElement;
   private debugToggle!: HTMLInputElement;
+  private bannerQueue: Array<{ text: string; color: string }> = [];
+  private activeBanner?: HTMLDivElement;
 
   constructor(private root: HTMLDivElement, private callbacks: OverlayCallbacks) {
     this.render();
@@ -62,6 +67,18 @@ export class UIOverlay {
     this.densityValue.textContent = `${state.spawnPattern} / ${state.spawnLiveInterval.toFixed(2)}s`;
     this.grooveValue.textContent = `${state.grooveCharge} / ${state.grooveTarget}`;
     this.layerValue.textContent = state.grooveLayerLabel;
+    this.grooveBoostAlert.classList.toggle("incoming", state.grooveBoostIncoming);
+    if (state.grooveBoostIncoming) {
+      const alertText =
+        state.grooveBoostTargetLevel === null
+          ? "GROOVE BOOST INCOMING"
+          : `GROOVE ${state.grooveBoostTargetLevel} INCOMING`;
+      this.grooveBoostText.textContent = this.glitchText(alertText, state.grooveBoostIntensity);
+      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", state.grooveBoostIntensity.toFixed(3));
+    } else {
+      this.grooveBoostText.textContent = String(state.grooveLevel).padStart(2, "0");
+      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", "0");
+    }
     this.formationValue.textContent = `${state.activeFormationCaught} / ${state.activeFormationRequired}`;
     this.formationSection.classList.toggle("hidden", !state.activeFormationVisible);
     this.formationFill.style.width = state.activeFormationVisible
@@ -116,18 +133,22 @@ export class UIOverlay {
     color: string,
     variant: "note" | "banner" = "note",
   ): void {
+    if (variant === "banner") {
+      this.enqueueBanner(text, color);
+      return;
+    }
+
     const label = document.createElement("div");
-    label.className = `note-label${variant === "banner" ? " banner" : ""}`;
+    label.className = "note-label";
     label.textContent = text;
+    label.style.color = color;
     label.style.left = `${x}px`;
     label.style.top = `${y}px`;
-    label.style.color = color;
-
     this.noteLayer.append(label);
 
     window.setTimeout(() => {
       label.remove();
-    }, variant === "banner" ? 1280 : 920);
+    }, 920);
   }
 
   private render(): void {
@@ -151,10 +172,14 @@ export class UIOverlay {
           <button type="button" data-quick-mute>Mute</button>
         </div>
 
+        <div class="groove-boost-alert" data-groove-boost-alert>
+          <span data-groove-boost-text>01</span>
+        </div>
+
         <div class="formation-strip floating hidden" data-formation-section>
           <div class="formation-copy">
             <strong>Special Catch</strong>
-            <span data-formation-value>0 / 0</span>
+            <span class="visually-hidden" aria-hidden="true" data-formation-value>0 / 0</span>
           </div>
           <div class="formation-bar">
             <div class="formation-fill" data-formation-fill></div>
@@ -259,7 +284,10 @@ export class UIOverlay {
           </section>
         </div>
 
-        <div class="label-layer" data-note-layer></div>
+        <div class="label-layer">
+          <div class="hype-layer" data-hype-layer></div>
+          <div class="note-layer" data-note-layer></div>
+        </div>
 
         <div class="start-wrap">
           <div class="start-card" data-start-card>
@@ -286,10 +314,13 @@ export class UIOverlay {
 
     this.quickDock = this.query<HTMLDivElement>(".quick-dock");
     this.hudTop = this.query<HTMLDivElement>(".hud-top");
+    this.grooveBoostAlert = this.query<HTMLDivElement>("[data-groove-boost-alert]");
+    this.grooveBoostText = this.query("[data-groove-boost-text]");
     this.startCard = this.query<HTMLDivElement>("[data-start-card]");
     this.completionCard = this.query<HTMLDivElement>("[data-completion-card]");
     this.completionTitle = this.query("[data-completion-title]");
     this.completionMessage = this.query("[data-completion-message]");
+    this.hypeLayer = this.query<HTMLDivElement>("[data-hype-layer]");
     this.noteLayer = this.query<HTMLDivElement>("[data-note-layer]");
     this.objectCountValue = this.query("[data-object-count]");
     this.modeValue = this.query("[data-mode-value]");
@@ -388,5 +419,59 @@ export class UIOverlay {
     }
 
     return element;
+  }
+
+  private enqueueBanner(text: string, color: string): void {
+    this.bannerQueue.push({ text: text.toUpperCase(), color });
+    this.maybeShowNextBanner();
+  }
+
+  private maybeShowNextBanner(): void {
+    if (this.activeBanner || this.bannerQueue.length === 0) {
+      return;
+    }
+
+    const next = this.bannerQueue.shift();
+
+    if (!next) {
+      return;
+    }
+
+    const label = document.createElement("div");
+    label.className = "note-label banner";
+    label.textContent = next.text;
+    label.style.left = "50%";
+    label.style.top = "50%";
+    label.style.color = next.color;
+    this.hypeLayer.append(label);
+    this.activeBanner = label;
+
+    window.setTimeout(() => {
+      label.remove();
+      if (this.activeBanner === label) {
+        this.activeBanner = undefined;
+      }
+      this.maybeShowNextBanner();
+    }, 720);
+  }
+
+  private glitchText(text: string, intensity: number): string {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const timeBucket = Math.floor(performance.now() / Math.max(32, 96 - intensity * 56));
+    const chance = 0.01 + intensity * 0.08;
+
+    return [...text].map((char, index) => {
+      if (char === " " || char === "-") {
+        return char;
+      }
+
+      const seed = Math.abs(Math.sin((index + 1) * 12.9898 + timeBucket * 78.233));
+      if (seed >= chance) {
+        return char;
+      }
+
+      const swapIndex = Math.floor((seed * 1000 + timeBucket * 17 + index * 13) % alphabet.length);
+      return alphabet[swapIndex];
+    }).join("");
   }
 }

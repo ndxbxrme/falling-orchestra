@@ -1,6 +1,14 @@
 import { ROOT_NOTES, SCALE_MODES } from "./config";
 import { ScaleQuantizer } from "./ScaleQuantizer";
-import type { HarmonySpanConfig, LoopClipConfig, SongConfig } from "./songConfig";
+import type {
+  HarmonySpanConfig,
+  ImpactPaletteConfig,
+  ImpactRoutingConfig,
+  ImpactSampleLayerConfig,
+  ImpactVoiceConfig,
+  LoopClipConfig,
+  SongConfig,
+} from "./songConfig";
 import type { InstrumentFamily, PlayedNote, RootNoteName, ScaleModeName } from "./types";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -18,6 +26,90 @@ const TRANSPORT_LOOKAHEAD = 0.16;
 const LOOP_DEBUG =
   typeof window !== "undefined" &&
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
+  voices: {
+    bell: {
+      mode: "stab",
+      gain: 0.58,
+      attack: 0.002,
+      decay: 0.24,
+      cutoff: 1820,
+      resonance: 1.2,
+      drive: 0.34,
+      tone: 0.2,
+      routing: { dry: 0.74, drive: 0.42, delay: 0.08, reverb: 0.12, megaFx: 0.08 },
+    },
+    bass: {
+      mode: "sub",
+      gain: 0.76,
+      attack: 0.002,
+      decay: 0.42,
+      cutoff: 840,
+      resonance: 1,
+      drive: 0.3,
+      tone: -0.34,
+      routing: { dry: 0.84, drive: 0.38, delay: 0.04, reverb: 0.08, megaFx: 0.08 },
+    },
+    spark: {
+      mode: "tick",
+      gain: 0.4,
+      attack: 0.001,
+      decay: 0.12,
+      cutoff: 2400,
+      resonance: 1.25,
+      drive: 0.4,
+      tone: 0.16,
+      routing: { dry: 0.6, drive: 0.48, delay: 0.14, reverb: 0.08, megaFx: 0.12 },
+    },
+    snare: {
+      mode: "snare",
+      gain: 0.66,
+      attack: 0.001,
+      decay: 0.18,
+      cutoff: 2240,
+      resonance: 0.92,
+      drive: 0.4,
+      tone: 0,
+      routing: { dry: 0.74, drive: 0.46, delay: 0.08, reverb: 0.1, megaFx: 0.12 },
+    },
+    mega: {
+      mode: "mega",
+      gain: 0.88,
+      attack: 0.001,
+      decay: 0.38,
+      cutoff: 1760,
+      resonance: 1.5,
+      drive: 0.68,
+      tone: 0.08,
+      routing: { dry: 0.5, drive: 0.64, delay: 0.3, reverb: 0.18, megaFx: 0.82 },
+    },
+  },
+  buses: {
+    dry: { gain: 0.74, tone: 0, drive: 0 },
+    drive: { gain: 0.34, tone: 0.08, drive: 0.46 },
+    delay: { gain: 0.18, tone: -0.2, drive: 0.16, delayTime: 0.26, feedback: 0.28 },
+    reverb: { gain: 0.14, tone: -0.28, drive: 0.08 },
+    megaFx: { gain: 0.22, tone: 0.1, drive: 0.62, delayTime: 0.18, feedback: 0.38 },
+  },
+  grooveFxProfile: {
+    driveBoost: 0.22,
+    delayBoost: 0.18,
+    reverbBoost: 0.12,
+    megaBoost: 0.24,
+    filterOpen: 800,
+    wobbleDepth: 0.14,
+  },
+  megaFxMacro: {
+    duration: 1,
+    decay: 1.6,
+    xToDelay: 0.16,
+    xToWidth: 0.24,
+    yToDrive: 0.3,
+    yToFeedback: 0.16,
+    yToFilter: 600,
+    comboMultiplier: 1.2,
+  },
+};
 const midiToLabel = (midi: number): string => {
   const octave = Math.floor(midi / 12) - 1;
   return `${NOTE_NAMES[midi % 12]}${octave}`;
@@ -46,6 +138,26 @@ export class MusicSystem {
   private audioContext?: AudioContext;
   private masterGain?: GainNode;
   private compressor?: DynamicsCompressorNode;
+  private impactMixGain?: GainNode;
+  private dryBusGain?: GainNode;
+  private driveBusInput?: GainNode;
+  private driveBusFilter?: BiquadFilterNode;
+  private driveBusShaper?: WaveShaperNode;
+  private driveBusGain?: GainNode;
+  private delayBusInput?: GainNode;
+  private delayBusFilter?: BiquadFilterNode;
+  private delayBusNode?: DelayNode;
+  private delayBusFeedback?: GainNode;
+  private delayBusWet?: GainNode;
+  private reverbBusInput?: GainNode;
+  private reverbBusFilter?: BiquadFilterNode;
+  private reverbBusWet?: GainNode;
+  private megaBusInput?: GainNode;
+  private megaBusFilter?: BiquadFilterNode;
+  private megaBusShaper?: WaveShaperNode;
+  private megaBusDelay?: DelayNode;
+  private megaBusWet?: GainNode;
+  private megaBusPanner?: StereoPannerNode;
   private quantizer = new ScaleQuantizer();
   private bpm = DEFAULT_BPM;
   private beatsPerBar = DEFAULT_BEATS_PER_BAR;
@@ -58,6 +170,7 @@ export class MusicSystem {
   private noiseBuffer?: AudioBuffer;
   private harmonyControlMode: "cycle" | "manual" = "cycle";
   private song?: SongConfig;
+  private impactPalette: ImpactPaletteConfig = DEFAULT_IMPACT_PALETTE;
   private grooveLevels = new Map<
     number,
     { main?: LoopClipConfig; intro?: LoopClipConfig; completesSong?: boolean }
@@ -67,14 +180,28 @@ export class MusicSystem {
   private loopFetchPromise?: Promise<void>;
   private loopBuffers = new Map<string, AudioBuffer>();
   private loopLoadPromise?: Promise<void>;
+  private impactSampleAudioData = new Map<string, ArrayBuffer>();
+  private impactSampleFetchPromise?: Promise<void>;
+  private impactSampleBuffers = new Map<string, AudioBuffer>();
+  private impactSampleLoadPromise?: Promise<void>;
   private desiredGrooveLevel = 1;
   private queuedTransitionLevel: number | null = null;
+  private transitionNoticeLevel: number | null = null;
+  private transitionNoticeQueuedAt?: number;
+  private transitionNoticeHandoffTime?: number;
   private scheduledLoopSources = new Set<AudioBufferSourceNode>();
   private songCompleted = false;
   private songEndingScheduled = false;
+  private megaMacroState = {
+    triggeredAt: Number.NEGATIVE_INFINITY,
+    x: 0.5,
+    y: 0,
+    intensity: 0,
+  };
 
   loadSong(song: SongConfig): void {
     this.song = song;
+    this.impactPalette = song.impactPalette ?? DEFAULT_IMPACT_PALETTE;
     this.bpm = song.transport.bpm;
     this.beatsPerBar = song.transport.beatsPerBar;
     this.harmonyCycleBars = song.transport.harmonyCycleBars;
@@ -98,6 +225,7 @@ export class MusicSystem {
     this.currentGrooveLevel = baseLevel;
     this.desiredGrooveLevel = baseLevel;
     this.queuedTransitionLevel = null;
+    this.clearTransitionNotice();
     this.songCompleted = false;
     this.songEndingScheduled = false;
     this.nextGrooveBoundaryTime = undefined;
@@ -106,6 +234,7 @@ export class MusicSystem {
       this.mode = this.harmonyTimeline[0].mode;
     }
     void this.prefetchLoopAssets();
+    void this.prefetchImpactSampleAssets();
   }
 
   async unlock(): Promise<void> {
@@ -124,6 +253,7 @@ export class MusicSystem {
       this.masterGain.connect(this.compressor);
       this.compressor.connect(this.audioContext.destination);
       this.noiseBuffer = this.createNoiseBuffer();
+      this.initializeImpactGraph();
     }
 
     if (this.audioContext.state === "suspended") {
@@ -131,6 +261,7 @@ export class MusicSystem {
     }
 
     await this.ensureLoopBuffersLoaded();
+    await this.ensureImpactSampleBuffersLoaded();
 
     if (this.transportStartTime === undefined) {
       const startTime = this.getInitialTransportStartTime();
@@ -180,10 +311,12 @@ export class MusicSystem {
 
     if (level === this.currentGrooveLevel) {
       this.queuedTransitionLevel = null;
+      this.clearTransitionNotice();
       return;
     }
 
     this.queuedTransitionLevel = level;
+    this.updateTransitionNotice(level);
   }
 
   resetGroovePlayback(): void {
@@ -197,8 +330,10 @@ export class MusicSystem {
     this.currentGrooveLevel = baseLevel;
     this.desiredGrooveLevel = baseLevel;
     this.queuedTransitionLevel = null;
+    this.clearTransitionNotice();
     this.songCompleted = false;
     this.songEndingScheduled = false;
+    this.resetImpactMixLevel();
     this.primeTransport(nextStartTime);
     this.scheduleStartupGroove(nextStartTime);
   }
@@ -215,7 +350,15 @@ export class MusicSystem {
     const when = this.getNextSixteenthTime();
 
     if (options.family === "mega") {
-      this.playMegaVoice(clamp(options.impact, 0, 18), clamp(options.pan, -0.9, 0.9), when);
+      this.playVoice({
+        family: "mega",
+        midi: 43,
+        pan: clamp(options.pan, -0.9, 0.9),
+        gain: clamp(0.24 + options.impact / 18, 0.24, 1),
+        when,
+        impact: options.impact,
+        normalizedX: options.normalizedX,
+      });
       return {
         label: "MEGA",
         color: options.color,
@@ -223,7 +366,15 @@ export class MusicSystem {
     }
 
     if (options.family === "snare") {
-      this.playSnareImpact(clamp(options.impact, 0, 18), clamp(options.pan, -0.9, 0.9), when);
+      this.playVoice({
+        family: "snare",
+        midi: 62,
+        pan: clamp(options.pan, -0.9, 0.9),
+        gain: clamp(0.12 + options.impact / 18, 0.12, 0.82),
+        when,
+        impact: options.impact,
+        normalizedX: options.normalizedX,
+      });
       return {
         label: "SNARE",
         color: options.color,
@@ -252,6 +403,8 @@ export class MusicSystem {
       pan: clamp(options.pan, -0.9, 0.9),
       gain: clamp(0.1 + options.impact / 18, 0.1, 0.8),
       when,
+      impact: options.impact,
+      normalizedX: options.normalizedX,
     });
 
     return {
@@ -262,7 +415,18 @@ export class MusicSystem {
 
   triggerMegaCombo(options: { impact: number; pan: number }): void {
     const when = this.getNextSixteenthTime();
-    this.playMegaComboVoice(clamp(options.impact, 0, 20), clamp(options.pan, -0.9, 0.9), when);
+    const normalizedX = clamp((options.pan + 1) * 0.5, 0, 1);
+    const impact = clamp(options.impact, 0, 20);
+    this.playVoice({
+      family: "mega",
+      midi: 38,
+      pan: clamp(options.pan * 0.72, -0.9, 0.9),
+      gain: clamp(0.4 + impact / 20, 0.4, 1.15),
+      when,
+      impact,
+      normalizedX,
+      combo: true,
+    });
   }
 
   dispose(): void {
@@ -271,6 +435,27 @@ export class MusicSystem {
 
   isSongCompleted(): boolean {
     return this.songCompleted;
+  }
+
+  getPendingGrooveBoost(): { targetLevel: number; intensity: number } | null {
+    if (!this.audioContext || this.transitionNoticeLevel === null || this.transitionNoticeHandoffTime === undefined) {
+      return null;
+    }
+
+    const now = this.audioContext.currentTime;
+    if (now >= this.transitionNoticeHandoffTime) {
+      this.clearTransitionNotice();
+      return null;
+    }
+
+    const queuedAt = this.transitionNoticeQueuedAt ?? Math.max(0, this.transitionNoticeHandoffTime - 0.001);
+    const totalWindow = Math.max(0.001, this.transitionNoticeHandoffTime - queuedAt);
+    const progress = clamp((now - queuedAt) / totalWindow, 0, 1);
+
+    return {
+      targetLevel: this.transitionNoticeLevel,
+      intensity: 0.16 + progress * 0.84,
+    };
   }
 
   update(): void {
@@ -286,6 +471,10 @@ export class MusicSystem {
     const eighthDuration = quarterDuration / 2;
     const barDuration = quarterDuration * this.beatsPerBar;
     const now = this.audioContext.currentTime;
+    if (this.transitionNoticeHandoffTime !== undefined && now >= this.transitionNoticeHandoffTime) {
+      this.clearTransitionNotice();
+    }
+    this.updateImpactFxState(now);
     const startTime = this.transportStartTime;
     if (this.harmonyControlMode === "cycle") {
       this.syncDisplayedHarmony(now);
@@ -385,35 +574,43 @@ export class MusicSystem {
     gain: number;
     pan: number;
     when: number;
+    impact: number;
+    normalizedX: number;
+    combo?: boolean;
   }): void {
-    if (!this.audioContext || !this.masterGain) {
+    if (!this.audioContext || !this.impactMixGain) {
       return;
     }
 
+    const voiceConfig = this.impactPalette.voices[options.family];
     const frequency = midiToFrequency(options.midi);
     const output = this.audioContext.createGain();
-    const panNode = this.audioContext.createStereoPanner();
+    output.gain.setValueAtTime(1, options.when);
+    this.routeImpactVoice(output, voiceConfig.routing, options.pan, options.when);
+    this.playImpactSampleLayer(voiceConfig.sampleLayer, output, options.when, options.gain);
 
-    output.connect(panNode);
-    panNode.connect(this.masterGain);
-    panNode.pan.setValueAtTime(options.pan, options.when);
-
-    if (options.family === "bell") {
-      this.playBellVoice(frequency, options.gain, options.when, output);
+    if (voiceConfig.mode === "stab") {
+      this.playStabVoice(voiceConfig, frequency, options.gain, options.when, output);
       return;
     }
 
-    if (options.family === "bass") {
-      this.playBassVoice(frequency, options.gain, options.when, output);
+    if (voiceConfig.mode === "sub") {
+      this.playSubVoice(voiceConfig, frequency, options.gain, options.when, output);
       return;
     }
 
-    if (options.family === "snare") {
-      this.playSnareImpact(options.gain * 18, options.pan, options.when);
+    if (voiceConfig.mode === "tick") {
+      this.playTickVoice(voiceConfig, frequency, options.gain, options.when, output);
       return;
     }
 
-    this.playSparkVoice(frequency, options.gain, options.when, output);
+    if (voiceConfig.mode === "snare") {
+      this.playSnareVoice(voiceConfig, options.impact, options.when, output);
+      return;
+    }
+
+    this.triggerMegaMacro(options.normalizedX, clamp(options.impact / 18, 0, 1), options.combo ?? false);
+    this.playMegaVoice(voiceConfig, frequency, options.impact, options.when, output, options.combo ?? false);
   }
 
   private getNextSixteenthTime(): number {
@@ -422,19 +619,16 @@ export class MusicSystem {
     }
 
     const now = this.audioContext.currentTime;
-
-    if (this.transportStartTime === undefined) {
-      this.transportStartTime = now + 0.05;
-    }
+    const transportStartTime = this.transportStartTime ?? now + 0.05;
 
     const stepDuration = 60 / this.bpm / SIXTEENTH_NOTES_PER_BEAT;
 
-    if (now <= this.transportStartTime) {
-      return this.transportStartTime;
+    if (now <= transportStartTime) {
+      return transportStartTime;
     }
 
-    const stepsSinceStart = Math.ceil((now - this.transportStartTime) / stepDuration);
-    let scheduledTime = this.transportStartTime + stepsSinceStart * stepDuration;
+    const stepsSinceStart = Math.ceil((now - transportStartTime) / stepDuration);
+    let scheduledTime = transportStartTime + stepsSinceStart * stepDuration;
 
     if (scheduledTime - now < MIN_SCHEDULE_LOOKAHEAD) {
       scheduledTime += stepDuration;
@@ -541,6 +735,65 @@ export class MusicSystem {
     return this.loopFetchPromise;
   }
 
+  private async ensureImpactSampleBuffersLoaded(): Promise<void> {
+    if (this.impactSampleLoadPromise) {
+      return this.impactSampleLoadPromise;
+    }
+
+    if (!this.audioContext) {
+      return;
+    }
+
+    await this.prefetchImpactSampleAssets();
+
+    this.impactSampleLoadPromise = Promise.all(
+      [...this.impactSampleAudioData.entries()].map(async ([assetUrl, audioData]) => {
+        if (this.impactSampleBuffers.has(assetUrl)) {
+          return;
+        }
+
+        const buffer = await this.audioContext!.decodeAudioData(audioData.slice(0));
+        this.impactSampleBuffers.set(assetUrl, buffer);
+      }),
+    ).then(() => undefined);
+
+    return this.impactSampleLoadPromise;
+  }
+
+  private async prefetchImpactSampleAssets(): Promise<void> {
+    if (this.impactSampleFetchPromise) {
+      return this.impactSampleFetchPromise;
+    }
+
+    const assetUrls = new Set<string>();
+    for (const voice of Object.values(this.impactPalette.voices)) {
+      if (voice.sampleLayer?.src) {
+        assetUrls.add(voice.sampleLayer.src);
+      }
+    }
+
+    if (assetUrls.size === 0) {
+      return;
+    }
+
+    this.impactSampleFetchPromise = Promise.all(
+      [...assetUrls].map(async (assetUrl) => {
+        if (this.impactSampleAudioData.has(assetUrl)) {
+          return;
+        }
+
+        const response = await fetch(assetUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to load impact sample asset: ${assetUrl}`);
+        }
+
+        this.impactSampleAudioData.set(assetUrl, await response.arrayBuffer());
+      }),
+    ).then(() => undefined);
+
+    return this.impactSampleFetchPromise;
+  }
+
   private getBaseGrooveLevel(): number {
     return this.song?.grooveLevels[0]?.level ?? this.currentGrooveLevel;
   }
@@ -549,12 +802,38 @@ export class MusicSystem {
     return (this.audioContext?.currentTime ?? 0) + INITIAL_TRANSPORT_LEAD;
   }
 
+  private updateTransitionNotice(level: number): void {
+    if (!this.audioContext || this.nextGrooveBoundaryTime === undefined) {
+      return;
+    }
+
+    this.transitionNoticeLevel = level;
+    this.transitionNoticeQueuedAt = this.audioContext.currentTime;
+    this.transitionNoticeHandoffTime = this.getGrooveTransitionHandoffTime(level, this.nextGrooveBoundaryTime);
+  }
+
+  private clearTransitionNotice(): void {
+    this.transitionNoticeLevel = null;
+    this.transitionNoticeQueuedAt = undefined;
+    this.transitionNoticeHandoffTime = undefined;
+  }
+
+  private getGrooveTransitionHandoffTime(level: number, boundaryTime: number): number {
+    const intro = this.grooveLevels.get(level)?.intro;
+    if (!intro) {
+      return boundaryTime;
+    }
+
+    return boundaryTime + this.getClipDuration(intro) * 0.5;
+  }
+
   private primeTransport(startTime: number): void {
     this.transportStartTime = startTime;
     this.nextGrooveBoundaryTime = undefined;
     this.nextQuarterIndex = 0;
     this.nextEighthIndex = 0;
     this.nextBarIndex = 0;
+    this.resetImpactMixLevel();
     logLoopDebug("primed transport", { startTime });
   }
 
@@ -599,6 +878,10 @@ export class MusicSystem {
 
       if (intro) {
         const introEndTime = when + this.getClipDuration(intro);
+        this.transitionNoticeHandoffTime = this.getGrooveTransitionHandoffTime(nextLevel, when);
+        if (grooveLevel?.completesSong) {
+          this.scheduleImpactFadeOut(when, this.getClipDuration(intro));
+        }
         this.scheduleGrooveClip(nextLevel, "intro", when, {
           onEnded: grooveLevel?.completesSong
             ? () => {
@@ -636,6 +919,7 @@ export class MusicSystem {
       }
 
       if (main) {
+        this.clearTransitionNotice();
         this.scheduleGrooveClip(nextLevel, "main", when);
         this.currentGrooveLevel = nextLevel;
         this.desiredGrooveLevel = nextLevel;
@@ -715,6 +999,33 @@ export class MusicSystem {
     return (60 / this.bpm) * this.beatsPerBar * clip.bars;
   }
 
+  private scheduleImpactFadeOut(startTime: number, duration: number): void {
+    if (!this.audioContext || !this.impactMixGain) {
+      return;
+    }
+
+    const gain = this.impactMixGain.gain;
+    const currentTime = this.audioContext.currentTime;
+    const effectiveStart = Math.max(startTime, currentTime);
+    const currentValue = gain.value;
+
+    gain.cancelScheduledValues(currentTime);
+    gain.setValueAtTime(currentValue, currentTime);
+    gain.setValueAtTime(currentValue, effectiveStart);
+    gain.linearRampToValueAtTime(0.0001, effectiveStart + Math.max(0.001, duration));
+  }
+
+  private resetImpactMixLevel(): void {
+    if (!this.audioContext || !this.impactMixGain) {
+      return;
+    }
+
+    const gain = this.impactMixGain.gain;
+    const now = this.audioContext.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(1, now);
+  }
+
   private stopScheduledLoopSources(): void {
     for (const source of this.scheduledLoopSources) {
       try {
@@ -725,6 +1036,253 @@ export class MusicSystem {
       source.disconnect();
     }
     this.scheduledLoopSources.clear();
+  }
+
+  private initializeImpactGraph(): void {
+    if (!this.audioContext || !this.masterGain || this.impactMixGain) {
+      return;
+    }
+
+    const ctx = this.audioContext;
+    const impactMix = ctx.createGain();
+    const dryBus = ctx.createGain();
+    const driveInput = ctx.createGain();
+    const driveFilter = ctx.createBiquadFilter();
+    const driveShaper = ctx.createWaveShaper();
+    const driveGain = ctx.createGain();
+    const delayInput = ctx.createGain();
+    const delayFilter = ctx.createBiquadFilter();
+    const delayNode = ctx.createDelay(1.5);
+    const delayFeedback = ctx.createGain();
+    const delayWet = ctx.createGain();
+    const reverbInput = ctx.createGain();
+    const reverbFilter = ctx.createBiquadFilter();
+    const reverbConvolver = ctx.createConvolver();
+    const reverbWet = ctx.createGain();
+    const megaInput = ctx.createGain();
+    const megaFilter = ctx.createBiquadFilter();
+    const megaShaper = ctx.createWaveShaper();
+    const megaDelay = ctx.createDelay(1.2);
+    const megaWet = ctx.createGain();
+    const megaPanner = ctx.createStereoPanner();
+
+    impactMix.gain.value = 1;
+    dryBus.gain.value = 0;
+    driveInput.gain.value = 1;
+    driveGain.gain.value = 0;
+    delayInput.gain.value = 1;
+    delayFeedback.gain.value = 0;
+    delayWet.gain.value = 0;
+    reverbInput.gain.value = 1;
+    reverbWet.gain.value = 0;
+    megaInput.gain.value = 1;
+    megaWet.gain.value = 0;
+    megaPanner.pan.value = 0;
+
+    impactMix.connect(this.masterGain);
+
+    dryBus.connect(impactMix);
+
+    driveFilter.type = "lowpass";
+    driveInput.connect(driveFilter);
+    driveFilter.connect(driveShaper);
+    driveShaper.connect(driveGain);
+    driveGain.connect(impactMix);
+
+    delayFilter.type = "lowpass";
+    delayInput.connect(delayFilter);
+    delayFilter.connect(delayNode);
+    delayNode.connect(delayWet);
+    delayWet.connect(impactMix);
+    delayNode.connect(delayFeedback);
+    delayFeedback.connect(delayFilter);
+
+    reverbFilter.type = "lowpass";
+    reverbInput.connect(reverbFilter);
+    reverbFilter.connect(reverbConvolver);
+    reverbConvolver.connect(reverbWet);
+    reverbWet.connect(impactMix);
+    reverbConvolver.buffer = this.createImpulseResponse(1.9, 2.4);
+
+    megaFilter.type = "bandpass";
+    megaInput.connect(megaFilter);
+    megaFilter.connect(megaShaper);
+    megaShaper.connect(megaDelay);
+    megaDelay.connect(megaPanner);
+    megaPanner.connect(megaWet);
+    megaWet.connect(impactMix);
+
+    this.impactMixGain = impactMix;
+    this.dryBusGain = dryBus;
+    this.driveBusInput = driveInput;
+    this.driveBusFilter = driveFilter;
+    this.driveBusShaper = driveShaper;
+    this.driveBusGain = driveGain;
+    this.delayBusInput = delayInput;
+    this.delayBusFilter = delayFilter;
+    this.delayBusNode = delayNode;
+    this.delayBusFeedback = delayFeedback;
+    this.delayBusWet = delayWet;
+    this.reverbBusInput = reverbInput;
+    this.reverbBusFilter = reverbFilter;
+    this.reverbBusWet = reverbWet;
+    this.megaBusInput = megaInput;
+    this.megaBusFilter = megaFilter;
+    this.megaBusShaper = megaShaper;
+    this.megaBusDelay = megaDelay;
+    this.megaBusWet = megaWet;
+    this.megaBusPanner = megaPanner;
+    this.updateImpactFxState(ctx.currentTime);
+  }
+
+  private updateImpactFxState(now: number): void {
+    if (
+      !this.dryBusGain ||
+      !this.driveBusFilter ||
+      !this.driveBusShaper ||
+      !this.driveBusGain ||
+      !this.delayBusFilter ||
+      !this.delayBusNode ||
+      !this.delayBusFeedback ||
+      !this.delayBusWet ||
+      !this.reverbBusFilter ||
+      !this.reverbBusWet ||
+      !this.megaBusFilter ||
+      !this.megaBusShaper ||
+      !this.megaBusDelay ||
+      !this.megaBusWet ||
+      !this.megaBusPanner
+    ) {
+      return;
+    }
+
+    const groove = this.getGrooveFxIntensity();
+    const profile = this.impactPalette.grooveFxProfile;
+    const macro = this.getMegaMacroSnapshot(now);
+    const wobblePhase = now * Math.PI * 0.45;
+    const wobble = Math.sin(wobblePhase) * (0.02 + groove * profile.wobbleDepth * 0.08);
+    const width = (macro.x * 2 - 1) * macro.intensity * this.impactPalette.megaFxMacro.xToWidth;
+
+    this.dryBusGain.gain.setTargetAtTime(this.impactPalette.buses.dry.gain, now, 0.03);
+
+    this.driveBusFilter.frequency.setTargetAtTime(
+      clamp(
+        1100 +
+          this.impactPalette.buses.drive.tone * 1000 +
+          groove * profile.filterOpen +
+          macro.y * this.impactPalette.megaFxMacro.yToFilter * macro.intensity,
+        420,
+        6400,
+      ),
+      now,
+      0.06,
+    );
+    this.driveBusGain.gain.setTargetAtTime(
+      this.impactPalette.buses.drive.gain + groove * profile.driveBoost + macro.y * 0.12 * macro.intensity,
+      now,
+      0.04,
+    );
+    this.driveBusShaper.curve = this.createDriveCurve(
+      clamp(this.impactPalette.buses.drive.drive + groove * profile.driveBoost + macro.y * 0.2 * macro.intensity, 0, 1.4),
+    ) as unknown as Float32Array<ArrayBuffer>;
+
+    this.delayBusFilter.frequency.setTargetAtTime(
+      clamp(1900 + groove * 900 + macro.y * 700 * macro.intensity, 700, 5200),
+      now,
+      0.08,
+    );
+    this.delayBusNode.delayTime.setTargetAtTime(
+      clamp(
+        (this.impactPalette.buses.delay.delayTime ?? 0.26) +
+          wobble +
+          (macro.x - 0.5) * this.impactPalette.megaFxMacro.xToDelay * macro.intensity,
+        0.08,
+        0.58,
+      ),
+      now,
+      0.06,
+    );
+    this.delayBusFeedback.gain.setTargetAtTime(
+      clamp(
+        (this.impactPalette.buses.delay.feedback ?? 0.18) + groove * 0.03 + macro.y * 0.08 * macro.intensity,
+        0.04,
+        0.24,
+      ),
+      now,
+      0.06,
+    );
+    this.delayBusWet.gain.setTargetAtTime(
+      this.impactPalette.buses.delay.gain + groove * profile.delayBoost + macro.intensity * 0.08,
+      now,
+      0.06,
+    );
+
+    this.reverbBusFilter.frequency.setTargetAtTime(
+      clamp(1400 + groove * 700 + macro.y * 380 * macro.intensity, 500, 4200),
+      now,
+      0.1,
+    );
+    this.reverbBusWet.gain.setTargetAtTime(
+      this.impactPalette.buses.reverb.gain + groove * profile.reverbBoost + macro.intensity * 0.06,
+      now,
+      0.08,
+    );
+
+    this.megaBusFilter.frequency.setTargetAtTime(
+      clamp(900 + groove * 1200 + macro.y * 1100 * macro.intensity, 260, 7000),
+      now,
+      0.04,
+    );
+    this.megaBusDelay.delayTime.setTargetAtTime(
+      clamp((this.impactPalette.buses.megaFx.delayTime ?? 0.18) + wobble * 1.6 + macro.x * 0.08 * macro.intensity, 0.05, 0.42),
+      now,
+      0.03,
+    );
+    this.megaBusWet.gain.setTargetAtTime(
+      this.impactPalette.buses.megaFx.gain + groove * profile.megaBoost * 0.36 + macro.intensity * 0.12,
+      now,
+      0.04,
+    );
+    this.megaBusPanner.pan.setTargetAtTime(width, now, 0.04);
+    this.megaBusShaper.curve = this.createDriveCurve(
+      clamp(this.impactPalette.buses.megaFx.drive + groove * 0.26 + macro.y * this.impactPalette.megaFxMacro.yToDrive * macro.intensity, 0, 1.4),
+    ) as unknown as Float32Array<ArrayBuffer>;
+  }
+
+  private routeImpactVoice(
+    source: AudioNode,
+    routing: ImpactRoutingConfig,
+    pan: number,
+    when: number,
+  ): void {
+    if (!this.audioContext) {
+      return;
+    }
+
+    const panner = this.audioContext.createStereoPanner();
+    source.connect(panner);
+    panner.pan.setValueAtTime(pan, when);
+    this.connectBusSend(panner, this.dryBusGain, routing.dry, when);
+    this.connectBusSend(panner, this.driveBusInput, routing.drive, when);
+    this.connectBusSend(panner, this.delayBusInput, routing.delay, when);
+    this.connectBusSend(panner, this.reverbBusInput, routing.reverb, when);
+    this.connectBusSend(panner, this.megaBusInput, routing.megaFx, when);
+  }
+
+  private connectBusSend(
+    source: AudioNode,
+    destination: AudioNode | undefined,
+    amount: number,
+    when: number,
+  ): void {
+    if (!this.audioContext || !destination || amount <= 0) {
+      return;
+    }
+
+    const send = this.audioContext.createGain();
+    send.gain.setValueAtTime(amount, when);
+    source.connect(send);
+    send.connect(destination);
   }
 
   private createNoiseBuffer(): AudioBuffer {
@@ -739,12 +1297,260 @@ export class MusicSystem {
 
     return buffer;
   }
-  private playSnareImpact(impact: number, pan: number, when: number): void {
-    if (!this.audioContext || !this.masterGain) {
+  private createImpulseResponse(duration: number, decay: number): AudioBuffer {
+    const ctx = this.audioContext!;
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buffer = ctx.createBuffer(2, length, sampleRate);
+
+    for (let channelIndex = 0; channelIndex < buffer.numberOfChannels; channelIndex += 1) {
+      const channel = buffer.getChannelData(channelIndex);
+      for (let index = 0; index < length; index += 1) {
+        const time = index / length;
+        channel[index] = (Math.random() * 2 - 1) * (1 - time) ** decay;
+      }
+    }
+
+    return buffer;
+  }
+
+  private createDriveCurve(amount: number): Float32Array<ArrayBufferLike> {
+    const curve = new Float32Array(512);
+    const drive = 8 + amount * 48;
+    for (let index = 0; index < curve.length; index += 1) {
+      const x = (index / (curve.length - 1)) * 2 - 1;
+      curve[index] = ((1 + drive) * x) / (1 + drive * Math.abs(x));
+    }
+    return curve;
+  }
+
+  private createVoiceChain(
+    config: ImpactVoiceConfig,
+    output: GainNode,
+    when: number,
+    filterType: BiquadFilterType,
+  ): { env: GainNode; filter: BiquadFilterNode } {
+    const ctx = this.audioContext!;
+    const filter = ctx.createBiquadFilter();
+    const shaper = ctx.createWaveShaper();
+    const env = ctx.createGain();
+
+    filter.type = filterType;
+    filter.frequency.setValueAtTime(clamp(config.cutoff, 120, 12000), when);
+    filter.Q.value = config.resonance;
+    shaper.curve = this.createDriveCurve(config.drive) as unknown as Float32Array<ArrayBuffer>;
+    env.gain.setValueAtTime(0.0001, when);
+
+    filter.connect(shaper);
+    shaper.connect(env);
+    env.connect(output);
+
+    return { env, filter };
+  }
+
+  private playImpactSampleLayer(
+    sampleLayer: ImpactSampleLayerConfig | undefined,
+    output: GainNode,
+    when: number,
+    gainAmount: number,
+  ): void {
+    if (!this.audioContext || !sampleLayer?.src) {
       return;
     }
 
-    const ctx = this.audioContext;
+    const buffer = this.impactSampleBuffers.get(sampleLayer.src);
+    if (!buffer) {
+      return;
+    }
+
+    const source = this.audioContext.createBufferSource();
+    const gain = this.audioContext.createGain();
+    let tail: AudioNode = gain;
+
+    source.buffer = buffer;
+    source.playbackRate.setValueAtTime(sampleLayer.playbackRate ?? 1, when);
+    gain.gain.setValueAtTime(sampleLayer.gain * gainAmount, when);
+
+    if (sampleLayer.filterType && sampleLayer.filterFrequency) {
+      const filter = this.audioContext.createBiquadFilter();
+      filter.type = sampleLayer.filterType;
+      filter.frequency.setValueAtTime(sampleLayer.filterFrequency, when);
+      source.connect(filter);
+      filter.connect(gain);
+      tail = filter;
+    } else {
+      source.connect(gain);
+    }
+
+    gain.connect(output);
+    source.start(when);
+    source.stop(when + buffer.duration / (sampleLayer.playbackRate ?? 1));
+    source.addEventListener("ended", () => {
+      source.disconnect();
+      gain.disconnect();
+      tail.disconnect();
+    });
+  }
+
+  private playStabVoice(
+    config: ImpactVoiceConfig,
+    frequency: number,
+    gainAmount: number,
+    when: number,
+    output: GainNode,
+  ): void {
+    const ctx = this.audioContext!;
+    const bodyA = ctx.createOscillator();
+    const bodyB = ctx.createOscillator();
+    const metallic = ctx.createOscillator();
+    const metallicGain = ctx.createGain();
+    const { env, filter } = this.createVoiceChain(config, output, when, "bandpass");
+    const targetGain = config.gain * gainAmount;
+    const detune = config.detuneCents ?? 0;
+    const endFrequency = frequency * (1 - (config.pitchDrop ?? 0));
+
+    bodyA.type = "sawtooth";
+    bodyA.frequency.setValueAtTime(frequency, when);
+    bodyA.frequency.exponentialRampToValueAtTime(Math.max(40, endFrequency), when + config.decay);
+    bodyA.detune.setValueAtTime(detune, when);
+
+    bodyB.type = "triangle";
+    bodyB.frequency.setValueAtTime(frequency * 0.997, when);
+    bodyB.detune.setValueAtTime(-detune * 0.7, when);
+
+    metallic.type = "square";
+    metallic.frequency.setValueAtTime(frequency * 1.98, when);
+    metallicGain.gain.setValueAtTime(0.22 + config.tone * 0.14, when);
+
+    env.gain.linearRampToValueAtTime(targetGain, when + config.attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + config.decay);
+    filter.frequency.exponentialRampToValueAtTime(clamp(config.cutoff * 0.56, 160, 8000), when + config.decay);
+
+    bodyA.connect(filter);
+    bodyB.connect(filter);
+    metallic.connect(metallicGain);
+    metallicGain.connect(filter);
+
+    bodyA.start(when);
+    bodyB.start(when);
+    metallic.start(when);
+    bodyA.stop(when + config.decay + 0.08);
+    bodyB.stop(when + config.decay + 0.08);
+    metallic.stop(when + config.decay + 0.06);
+  }
+
+  private playSubVoice(
+    config: ImpactVoiceConfig,
+    frequency: number,
+    gainAmount: number,
+    when: number,
+    output: GainNode,
+  ): void {
+    const ctx = this.audioContext!;
+    const body = ctx.createOscillator();
+    const sub = ctx.createOscillator();
+    const click = ctx.createBufferSource();
+    const clickFilter = ctx.createBiquadFilter();
+    const clickGain = ctx.createGain();
+    const subGain = ctx.createGain();
+    const { env, filter } = this.createVoiceChain(config, output, when, "lowpass");
+    const targetGain = config.gain * gainAmount;
+    const endFrequency = frequency * (1 - (config.pitchDrop ?? 0));
+
+    body.type = "triangle";
+    body.frequency.setValueAtTime(frequency, when);
+    body.frequency.exponentialRampToValueAtTime(Math.max(36, endFrequency), when + config.decay);
+
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(Math.max(30, frequency / 2), when);
+    subGain.gain.setValueAtTime(0.38, when);
+
+    click.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
+    clickFilter.type = "highpass";
+    clickFilter.frequency.setValueAtTime(1200, when);
+    clickGain.gain.setValueAtTime(0.0001, when);
+    clickGain.gain.linearRampToValueAtTime(0.08, when + 0.003);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+
+    env.gain.linearRampToValueAtTime(targetGain, when + config.attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + config.decay);
+    filter.frequency.exponentialRampToValueAtTime(clamp(config.cutoff * 0.72, 120, 6000), when + config.decay);
+
+    body.connect(filter);
+    sub.connect(subGain);
+    subGain.connect(filter);
+    click.connect(clickFilter);
+    clickFilter.connect(clickGain);
+    clickGain.connect(filter);
+
+    body.start(when);
+    sub.start(when);
+    click.start(when);
+    body.stop(when + config.decay + 0.12);
+    sub.stop(when + config.decay + 0.16);
+    click.stop(when + 0.06);
+  }
+
+  private playTickVoice(
+    config: ImpactVoiceConfig,
+    frequency: number,
+    gainAmount: number,
+    when: number,
+    output: GainNode,
+  ): void {
+    const ctx = this.audioContext!;
+    const body = ctx.createOscillator();
+    const overtone = ctx.createOscillator();
+    const noise = ctx.createBufferSource();
+    const noiseFilter = ctx.createBiquadFilter();
+    const noiseGain = ctx.createGain();
+    const overtoneGain = ctx.createGain();
+    const { env, filter } = this.createVoiceChain(config, output, when, "highpass");
+    const targetGain = config.gain * gainAmount;
+
+    body.type = "square";
+    body.frequency.setValueAtTime(frequency, when);
+    body.detune.setValueAtTime(config.detuneCents ?? 0, when);
+    body.frequency.exponentialRampToValueAtTime(Math.max(60, frequency * 0.78), when + config.decay);
+
+    overtone.type = "triangle";
+    overtone.frequency.setValueAtTime(frequency * 2.6, when);
+    overtoneGain.gain.setValueAtTime(0.16, when);
+
+    noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
+    noiseFilter.type = "bandpass";
+    noiseFilter.frequency.setValueAtTime(clamp(config.cutoff * 1.08, 400, 9000), when);
+    noiseFilter.Q.value = 1.2;
+    noiseGain.gain.setValueAtTime(0.0001, when);
+    noiseGain.gain.linearRampToValueAtTime(0.08 + gainAmount * 0.12, when + 0.002);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + config.decay * 0.7);
+
+    env.gain.linearRampToValueAtTime(targetGain, when + config.attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + config.decay);
+    filter.frequency.exponentialRampToValueAtTime(clamp(config.cutoff * 1.4, 720, 10000), when + config.decay);
+
+    body.connect(filter);
+    overtone.connect(overtoneGain);
+    overtoneGain.connect(filter);
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(filter);
+
+    body.start(when);
+    overtone.start(when);
+    noise.start(when);
+    body.stop(when + config.decay + 0.08);
+    overtone.stop(when + config.decay + 0.08);
+    noise.stop(when + config.decay * 0.78);
+  }
+
+  private playSnareVoice(
+    config: ImpactVoiceConfig,
+    impact: number,
+    when: number,
+    output: GainNode,
+  ): void {
+    const ctx = this.audioContext!;
     const noise = ctx.createBufferSource();
     const noiseFilter = ctx.createBiquadFilter();
     const noiseGain = ctx.createGain();
@@ -752,367 +1558,150 @@ export class MusicSystem {
     const bodyGain = ctx.createGain();
     const click = ctx.createOscillator();
     const clickGain = ctx.createGain();
-    const output = ctx.createGain();
-    const panNode = ctx.createStereoPanner();
-    const energy = 0.42 + clamp(impact / 18, 0, 1) * 0.5;
-
-    output.connect(panNode);
-    panNode.connect(this.masterGain);
-    panNode.pan.setValueAtTime(pan, when);
+    const { env, filter } = this.createVoiceChain(config, output, when, "bandpass");
+    const energy = config.gain * (0.52 + clamp(impact / 18, 0, 1) * 0.52);
 
     noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
-    noiseFilter.type = "bandpass";
-    noiseFilter.frequency.setValueAtTime(2280, when);
-    noiseFilter.Q.value = 0.95;
+    noiseFilter.type = "highpass";
+    noiseFilter.frequency.setValueAtTime(config.cutoff, when);
+    noiseFilter.Q.value = config.resonance;
     noiseGain.gain.setValueAtTime(0.0001, when);
-    noiseGain.gain.linearRampToValueAtTime(0.22 * energy, when + 0.002);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.11);
+    noiseGain.gain.linearRampToValueAtTime(energy, when + 0.002);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + config.decay);
 
     body.type = "triangle";
-    body.frequency.setValueAtTime(284, when);
-    body.frequency.exponentialRampToValueAtTime(138, when + 0.07);
+    body.frequency.setValueAtTime(248, when);
+    body.frequency.exponentialRampToValueAtTime(126, when + config.decay * 0.74);
     bodyGain.gain.setValueAtTime(0.0001, when);
-    bodyGain.gain.linearRampToValueAtTime(0.14 * energy, when + 0.002);
-    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.09);
+    bodyGain.gain.linearRampToValueAtTime(energy * 0.42, when + 0.003);
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + config.decay * 0.8);
 
     click.type = "square";
-    click.frequency.setValueAtTime(3600, when);
-    click.frequency.exponentialRampToValueAtTime(1200, when + 0.018);
+    click.frequency.setValueAtTime(2800, when);
+    click.frequency.exponentialRampToValueAtTime(1260, when + 0.02);
     clickGain.gain.setValueAtTime(0.0001, when);
-    clickGain.gain.linearRampToValueAtTime(0.075 * energy, when + 0.001);
-    clickGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.02);
+    clickGain.gain.linearRampToValueAtTime(0.08, when + 0.001);
+    clickGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.022);
 
-    output.gain.setValueAtTime(0.92, when);
+    env.gain.linearRampToValueAtTime(1, when + config.attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + config.decay + 0.04);
+    filter.frequency.exponentialRampToValueAtTime(clamp(config.cutoff * 0.64, 400, 6400), when + config.decay);
 
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
-    noiseGain.connect(output);
-
-    body.connect(bodyGain);
-    bodyGain.connect(output);
-
-    click.connect(clickGain);
-    clickGain.connect(output);
-
-    noise.start(when);
-    noise.stop(when + 0.12);
-    body.start(when);
-    body.stop(when + 0.1);
-    click.start(when);
-    click.stop(when + 0.022);
-  }
-
-  private playMegaVoice(impact: number, pan: number, when: number): void {
-    if (!this.audioContext || !this.masterGain) {
-      return;
-    }
-
-    const ctx = this.audioContext;
-    const output = ctx.createGain();
-    const panNode = ctx.createStereoPanner();
-    const variant = Math.floor(Math.random() * 3);
-    const energy = 0.42 + clamp(impact / 18, 0, 1) * 0.48;
-
-    output.connect(panNode);
-    panNode.connect(this.masterGain);
-    panNode.pan.setValueAtTime(pan, when);
-    output.gain.setValueAtTime(0.88, when);
-
-    if (variant === 0) {
-      const noise = ctx.createBufferSource();
-      const noiseFilter = ctx.createBiquadFilter();
-      const noiseGain = ctx.createGain();
-      const body = ctx.createOscillator();
-      const bodyGain = ctx.createGain();
-
-      noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
-      noiseFilter.type = "bandpass";
-      noiseFilter.frequency.setValueAtTime(1240, when);
-      noiseFilter.Q.value = 1.1;
-      noiseGain.gain.setValueAtTime(0.0001, when);
-      noiseGain.gain.linearRampToValueAtTime(0.18 * energy, when + 0.004);
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.24);
-
-      body.type = "sawtooth";
-      body.frequency.setValueAtTime(290, when);
-      body.frequency.exponentialRampToValueAtTime(92, when + 0.2);
-      bodyGain.gain.setValueAtTime(0.0001, when);
-      bodyGain.gain.linearRampToValueAtTime(0.22 * energy, when + 0.006);
-      bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.28);
-
-      noise.connect(noiseFilter);
-      noiseFilter.connect(noiseGain);
-      noiseGain.connect(output);
-      body.connect(bodyGain);
-      bodyGain.connect(output);
-
-      noise.start(when);
-      noise.stop(when + 0.25);
-      body.start(when);
-      body.stop(when + 0.3);
-      return;
-    }
-
-    if (variant === 1) {
-      const shimmer = ctx.createOscillator();
-      const shimmerGain = ctx.createGain();
-      const noise = ctx.createBufferSource();
-      const noiseFilter = ctx.createBiquadFilter();
-      const noiseGain = ctx.createGain();
-
-      shimmer.type = "triangle";
-      shimmer.frequency.setValueAtTime(620, when);
-      shimmer.frequency.exponentialRampToValueAtTime(210, when + 0.12);
-      shimmerGain.gain.setValueAtTime(0.0001, when);
-      shimmerGain.gain.linearRampToValueAtTime(0.18 * energy, when + 0.002);
-      shimmerGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
-
-      noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
-      noiseFilter.type = "highpass";
-      noiseFilter.frequency.setValueAtTime(1800, when);
-      noiseGain.gain.setValueAtTime(0.0001, when);
-      noiseGain.gain.linearRampToValueAtTime(0.14 * energy, when + 0.002);
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.12);
-
-      shimmer.connect(shimmerGain);
-      shimmerGain.connect(output);
-      noise.connect(noiseFilter);
-      noiseFilter.connect(noiseGain);
-      noiseGain.connect(output);
-
-      shimmer.start(when);
-      shimmer.stop(when + 0.2);
-      noise.start(when);
-      noise.stop(when + 0.14);
-      return;
-    }
-
-    const body = ctx.createOscillator();
-    const sub = ctx.createOscillator();
-    const bodyGain = ctx.createGain();
-    const subGain = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(920, when);
-    filter.frequency.exponentialRampToValueAtTime(420, when + 0.22);
-    filter.Q.value = 1.4;
-
-    body.type = "square";
-    body.frequency.setValueAtTime(184, when);
-    body.frequency.exponentialRampToValueAtTime(74, when + 0.18);
-    bodyGain.gain.setValueAtTime(0.0001, when);
-    bodyGain.gain.linearRampToValueAtTime(0.2 * energy, when + 0.005);
-    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.26);
-
-    sub.type = "sine";
-    sub.frequency.setValueAtTime(62, when);
-    subGain.gain.setValueAtTime(0.0001, when);
-    subGain.gain.linearRampToValueAtTime(0.16 * energy, when + 0.008);
-    subGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.3);
-
+    noiseGain.connect(filter);
     body.connect(bodyGain);
     bodyGain.connect(filter);
-    sub.connect(subGain);
-    subGain.connect(filter);
-    filter.connect(output);
+    click.connect(clickGain);
+    clickGain.connect(filter);
 
+    noise.start(when);
     body.start(when);
-    body.stop(when + 0.28);
-    sub.start(when);
-    sub.stop(when + 0.32);
+    click.start(when);
+    noise.stop(when + config.decay + 0.02);
+    body.stop(when + config.decay * 0.84);
+    click.stop(when + 0.024);
   }
 
-  private playMegaComboVoice(impact: number, pan: number, when: number): void {
-    if (!this.audioContext || !this.masterGain) {
-      return;
-    }
-
-    const ctx = this.audioContext;
-    const output = ctx.createGain();
-    const panNode = ctx.createStereoPanner();
+  private playMegaVoice(
+    config: ImpactVoiceConfig,
+    frequency: number,
+    impact: number,
+    when: number,
+    output: GainNode,
+    combo: boolean,
+  ): void {
+    const ctx = this.audioContext!;
     const noise = ctx.createBufferSource();
     const noiseFilter = ctx.createBiquadFilter();
     const noiseGain = ctx.createGain();
     const sub = ctx.createOscillator();
-    const subGain = ctx.createGain();
     const bodyA = ctx.createOscillator();
     const bodyB = ctx.createOscillator();
     const bodyGain = ctx.createGain();
-    const toneFilter = ctx.createBiquadFilter();
-    const energy = 0.55 + clamp(impact / 20, 0, 1) * 0.55;
-
-    output.connect(panNode);
-    panNode.connect(this.masterGain);
-    panNode.pan.setValueAtTime(pan * 0.65, when);
-    output.gain.setValueAtTime(1.05, when);
+    const { env, filter } = this.createVoiceChain(config, output, when, "lowpass");
+    const energy = config.gain * (0.6 + clamp(impact / 20, 0, 1) * (combo ? 0.86 : 0.62));
+    const lowFrequency = Math.max(36, frequency * (combo ? 0.82 : 1));
 
     noise.buffer = this.noiseBuffer ?? this.createNoiseBuffer();
     noiseFilter.type = "bandpass";
-    noiseFilter.frequency.setValueAtTime(1680, when);
-    noiseFilter.frequency.exponentialRampToValueAtTime(740, when + 0.24);
-    noiseFilter.Q.value = 1.2;
+    noiseFilter.frequency.setValueAtTime(config.cutoff * 0.92, when);
+    noiseFilter.Q.value = 1.3;
     noiseGain.gain.setValueAtTime(0.0001, when);
-    noiseGain.gain.linearRampToValueAtTime(0.22 * energy, when + 0.004);
-    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.26);
+    noiseGain.gain.linearRampToValueAtTime(energy * 0.56, when + 0.003);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + config.decay * 0.88);
 
     sub.type = "sine";
-    sub.frequency.setValueAtTime(92, when);
-    sub.frequency.exponentialRampToValueAtTime(39, when + 0.42);
-    subGain.gain.setValueAtTime(0.0001, when);
-    subGain.gain.linearRampToValueAtTime(0.24 * energy, when + 0.01);
-    subGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.5);
+    sub.frequency.setValueAtTime(lowFrequency * 0.48, when);
+    sub.frequency.exponentialRampToValueAtTime(Math.max(28, lowFrequency * 0.26), when + config.decay);
 
     bodyA.type = "sawtooth";
-    bodyA.frequency.setValueAtTime(440, when);
-    bodyA.frequency.exponentialRampToValueAtTime(176, when + 0.22);
+    bodyA.frequency.setValueAtTime(lowFrequency, when);
+    bodyA.frequency.exponentialRampToValueAtTime(Math.max(46, lowFrequency * 0.54), when + config.decay * 0.86);
     bodyB.type = "triangle";
-    bodyB.frequency.setValueAtTime(660, when);
-    bodyB.frequency.exponentialRampToValueAtTime(248, when + 0.18);
+    bodyB.frequency.setValueAtTime(lowFrequency * 1.52, when);
+    bodyB.frequency.exponentialRampToValueAtTime(Math.max(58, lowFrequency * 0.78), when + config.decay * 0.7);
 
-    bodyGain.gain.setValueAtTime(0.0001, when);
-    bodyGain.gain.linearRampToValueAtTime(0.16 * energy, when + 0.006);
-    bodyGain.gain.exponentialRampToValueAtTime(0.0001, when + 0.3);
-
-    toneFilter.type = "lowpass";
-    toneFilter.frequency.setValueAtTime(2200, when);
-    toneFilter.frequency.exponentialRampToValueAtTime(620, when + 0.28);
-    toneFilter.Q.value = 1.05;
+    bodyGain.gain.setValueAtTime(combo ? 0.82 : 0.72, when);
+    env.gain.linearRampToValueAtTime(energy, when + config.attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, when + config.decay + (combo ? 0.18 : 0.1));
+    filter.frequency.setValueAtTime(clamp(config.cutoff + (combo ? 220 : 0), 300, 8000), when);
+    filter.frequency.exponentialRampToValueAtTime(clamp(config.cutoff * 0.34, 180, 4800), when + config.decay);
 
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
-    noiseGain.connect(output);
-
-    sub.connect(subGain);
-    subGain.connect(output);
-
+    noiseGain.connect(filter);
+    sub.connect(filter);
     bodyA.connect(bodyGain);
     bodyB.connect(bodyGain);
-    bodyGain.connect(toneFilter);
-    toneFilter.connect(output);
+    bodyGain.connect(filter);
 
     noise.start(when);
-    noise.stop(when + 0.28);
     sub.start(when);
-    sub.stop(when + 0.52);
     bodyA.start(when);
-    bodyA.stop(when + 0.32);
     bodyB.start(when);
-    bodyB.stop(when + 0.28);
+    noise.stop(when + config.decay * 0.92);
+    sub.stop(when + config.decay + 0.16);
+    bodyA.stop(when + config.decay + 0.14);
+    bodyB.stop(when + config.decay + 0.1);
   }
 
-  private playBellVoice(
-    frequency: number,
-    gainAmount: number,
-    now: number,
-    output: GainNode,
-  ): void {
-    const ctx = this.audioContext!;
-    const env = ctx.createGain();
-    const partialA = ctx.createOscillator();
-    const partialB = ctx.createOscillator();
-    const shimmer = ctx.createGain();
+  private triggerMegaMacro(normalizedX: number, normalizedY: number, combo: boolean): void {
+    if (!this.audioContext) {
+      return;
+    }
 
-    partialA.type = "sine";
-    partialA.frequency.setValueAtTime(frequency, now);
-
-    partialB.type = "triangle";
-    partialB.frequency.setValueAtTime(frequency * 2.01, now);
-
-    shimmer.gain.setValueAtTime(0.32, now);
-    env.gain.setValueAtTime(0.0001, now);
-    env.gain.linearRampToValueAtTime(gainAmount * 0.52, now + 0.01);
-    env.gain.exponentialRampToValueAtTime(0.0001, now + 1.45);
-
-    partialA.connect(env);
-    partialB.connect(shimmer);
-    shimmer.connect(env);
-    env.connect(output);
-
-    partialA.start(now);
-    partialB.start(now);
-    partialA.stop(now + 1.6);
-    partialB.stop(now + 1.6);
+    this.megaMacroState.triggeredAt = this.audioContext.currentTime;
+    this.megaMacroState.x = clamp(normalizedX, 0, 1);
+    this.megaMacroState.y = clamp(normalizedY, 0, 1);
+    this.megaMacroState.intensity = combo ? this.impactPalette.megaFxMacro.comboMultiplier : 1;
   }
 
-  private playBassVoice(
-    frequency: number,
-    gainAmount: number,
-    now: number,
-    output: GainNode,
-  ): void {
-    const ctx = this.audioContext!;
-    const env = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    const body = ctx.createOscillator();
-    const sub = ctx.createOscillator();
-    const subGain = ctx.createGain();
+  private getMegaMacroSnapshot(now: number): { intensity: number; x: number; y: number } {
+    const elapsed = now - this.megaMacroState.triggeredAt;
+    if (elapsed < 0 || elapsed > this.impactPalette.megaFxMacro.duration) {
+      return { intensity: 0, x: 0.5, y: 0 };
+    }
 
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(760, now);
-    filter.Q.value = 1.2;
-
-    body.type = "triangle";
-    body.frequency.setValueAtTime(frequency, now);
-
-    sub.type = "sine";
-    sub.frequency.setValueAtTime(frequency / 2, now);
-
-    subGain.gain.setValueAtTime(0.34, now);
-    env.gain.setValueAtTime(0.0001, now);
-    env.gain.linearRampToValueAtTime(gainAmount * 0.68, now + 0.015);
-    env.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
-
-    body.connect(filter);
-    sub.connect(subGain);
-    subGain.connect(filter);
-    filter.connect(env);
-    env.connect(output);
-
-    body.start(now);
-    sub.start(now);
-    body.stop(now + 0.82);
-    sub.stop(now + 0.82);
+    const fade = Math.exp(-elapsed * this.impactPalette.megaFxMacro.decay);
+    return {
+      intensity: this.megaMacroState.intensity * fade,
+      x: this.megaMacroState.x,
+      y: this.megaMacroState.y,
+    };
   }
 
-  private playSparkVoice(
-    frequency: number,
-    gainAmount: number,
-    now: number,
-    output: GainNode,
-  ): void {
-    const ctx = this.audioContext!;
-    const env = ctx.createGain();
-    const filter = ctx.createBiquadFilter();
-    const body = ctx.createOscillator();
-    const overtone = ctx.createOscillator();
-    const overtoneGain = ctx.createGain();
+  private getGrooveFxIntensity(): number {
+    const levels = this.song?.grooveLevels.map((grooveLevel) => grooveLevel.level) ?? [1];
+    if (levels.length <= 1) {
+      return 0;
+    }
 
-    filter.type = "highpass";
-    filter.frequency.setValueAtTime(720, now);
-    filter.Q.value = 0.9;
+    const grooveIndex = levels.indexOf(this.currentGrooveLevel);
+    if (grooveIndex <= 0) {
+      return 0;
+    }
 
-    body.type = "square";
-    body.frequency.setValueAtTime(frequency, now);
-    body.detune.setValueAtTime(-4, now);
-
-    overtone.type = "triangle";
-    overtone.frequency.setValueAtTime(frequency * 2.03, now);
-    overtoneGain.gain.setValueAtTime(0.25, now);
-
-    env.gain.setValueAtTime(0.0001, now);
-    env.gain.linearRampToValueAtTime(gainAmount * 0.42, now + 0.003);
-    env.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-
-    body.connect(filter);
-    overtone.connect(overtoneGain);
-    overtoneGain.connect(filter);
-    filter.connect(env);
-    env.connect(output);
-
-    body.start(now);
-    overtone.start(now);
-    body.stop(now + 0.28);
-    overtone.stop(now + 0.28);
+    return grooveIndex / (levels.length - 1);
   }
 }

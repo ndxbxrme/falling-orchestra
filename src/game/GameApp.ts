@@ -2,7 +2,7 @@ import { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import { GAME_CONFIG } from "./config";
 import { InputController } from "./InputController";
 import { MusicSystem } from "./MusicSystem";
-import { SONG2_CONFIG } from "./song2";
+import { SONG10_CONFIG } from "./song10";
 import { Spawner } from "./Spawner";
 import { UIOverlay } from "./UIOverlay";
 import { World } from "./World";
@@ -39,7 +39,7 @@ export class GameApp {
   private freezeSpawning = false;
   private debugLabels = false;
   private grooveCharge = 0;
-  private grooveLevels = SONG2_CONFIG.grooveLevels.map((grooveLevel) => grooveLevel.level);
+  private grooveLevels = SONG10_CONFIG.grooveLevels.map((grooveLevel) => grooveLevel.level);
   private specialFormations = new Map<string, FormationProgress>();
   private lastBackdropBarIndex = -1;
   private lastFrameTime = performance.now();
@@ -49,7 +49,7 @@ export class GameApp {
 
   constructor(private canvas: HTMLCanvasElement, overlayRoot: HTMLDivElement) {
     this.world = new World(canvas);
-    this.music.loadSong(SONG2_CONFIG);
+    this.music.loadSong(SONG10_CONFIG);
 
     this.input = new InputController(
       () => {
@@ -516,6 +516,8 @@ export class GameApp {
   }
 
   private getOverlayState(): OverlayState {
+    const pendingGrooveBoost = this.music.getPendingGrooveBoost();
+
     return {
       started: this.started,
       songCompleted: this.songCompleted,
@@ -533,6 +535,9 @@ export class GameApp {
       grooveTarget: GROOVE_TARGET,
       grooveLevel: this.music.currentGrooveLevel,
       grooveLayerLabel: this.getGrooveLayerLabel(),
+      grooveBoostIncoming: pendingGrooveBoost !== null,
+      grooveBoostTargetLevel: pendingGrooveBoost?.targetLevel ?? null,
+      grooveBoostIntensity: pendingGrooveBoost?.intensity ?? 0,
       activeFormationCaught: this.getActiveFormationSummary().caught,
       activeFormationRequired: this.getActiveFormationSummary().required,
       activeFormationVisible: this.getActiveFormationSummary().visible,
