@@ -14,7 +14,8 @@ export class InputController {
         | "toggleLiveMode"
         | "toggleHud"
         | "spawnRateUp"
-        | "spawnRateDown",
+        | "spawnRateDown"
+        | "forceGrooveUp",
     ) => void,
     private onRootHotkey: (note: RootNoteName) => void,
     private onModeHotkey: (mode: ScaleModeName) => void,
@@ -62,6 +63,13 @@ export class InputController {
     if (event.code === "ArrowDown") {
       event.preventDefault();
       this.onCommand("spawnRateDown");
+      this.onInteract();
+      return;
+    }
+
+    if (event.code === "NumpadAdd") {
+      event.preventDefault();
+      this.onCommand("forceGrooveUp");
       this.onInteract();
       return;
     }

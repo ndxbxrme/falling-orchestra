@@ -1,8 +1,18 @@
 import { GAME_CONFIG } from "./config";
+import type { SpawnProfileConfig } from "./songConfig";
 import type { ArenaBounds, ObjectType, SpawnPattern } from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
+
+type SpawnWeights = Record<"bell" | "bass" | "snare" | "spark", number>;
+
+const DEFAULT_SPAWN_WEIGHTS: SpawnWeights = {
+  bass: 0.34,
+  bell: 0.25,
+  snare: 0.18,
+  spark: 0.23,
+};
 
 export interface SpawnRequest {
   type: ObjectType;
@@ -33,7 +43,9 @@ export class Spawner {
   spawnInterval: number = GAME_CONFIG.spawnIntervalDefault;
   currentInterval: number = GAME_CONFIG.spawnIntervalDefault;
   spawnPattern: SpawnPattern = "rain";
+  spawnCenter = 0.5;
   frozen = false;
+  private spawnWeights: SpawnWeights = { ...DEFAULT_SPAWN_WEIGHTS };
 
   private time = 0;
   private nextSpawnIn = 0.45;
@@ -111,6 +123,19 @@ export class Spawner {
     this.specialBurst = null;
     this.nextSpecialId = 0;
     this.megaQueued = false;
+  }
+
+  setSpawnProfile(profile?: SpawnProfileConfig): void {
+    this.spawnInterval = clamp(
+      profile?.spawnInterval ?? GAME_CONFIG.spawnIntervalDefault,
+      GAME_CONFIG.spawnIntervalMin,
+      GAME_CONFIG.spawnIntervalMax,
+    );
+    this.spawnPattern = profile?.spawnPattern ?? "rain";
+    this.spawnCenter = clamp(profile?.spawnCenter ?? 0.5, 0, 1);
+    this.spawnWeights = this.resolveSpawnWeights(profile?.spawnWeights);
+    this.currentInterval = Math.max(this.spawnInterval, GAME_CONFIG.spawnIntervalSafeMin);
+    this.nextSpawnIn = Math.min(this.nextSpawnIn, this.currentInterval);
   }
 
   syncTransportQuarter(quarterIndex: number, activeObjects: number): void {
@@ -309,16 +334,20 @@ export class Spawner {
 
   private pickType(): ObjectType {
     const roll = Math.random();
+    let cursor = 0;
 
-    if (roll < 0.34) {
+    cursor += this.spawnWeights.bass;
+    if (roll < cursor) {
       return "bass";
     }
 
-    if (roll < 0.59) {
+    cursor += this.spawnWeights.bell;
+    if (roll < cursor) {
       return "bell";
     }
 
-    if (roll < 0.77) {
+    cursor += this.spawnWeights.snare;
+    if (roll < cursor) {
       return "snare";
     }
 
@@ -326,25 +355,54 @@ export class Spawner {
   }
 
   private pickX(bounds: ArenaBounds): number {
+    const usableWidth = bounds.right - bounds.left - 2.8;
+    const minX = bounds.left + 1.4;
+    const maxX = bounds.right - 1.4;
+    const centerX = minX + this.spawnCenter * usableWidth;
+
     if (this.spawnPattern === "lanes") {
       const laneCount = 6;
       this.laneIndex = (this.laneIndex + 1) % laneCount;
       const ratio = (this.laneIndex + (Math.random() * 0.2 - 0.1)) / (laneCount - 1);
-      return bounds.left + 1.4 + ratio * (bounds.right - bounds.left - 2.8);
+      const laneSpan = usableWidth * 0.72;
+      return clamp(centerX + (ratio - 0.5) * laneSpan, minX, maxX);
     }
 
     if (this.spawnPattern === "swing") {
-      const swingCenter =
-        (bounds.left + bounds.right) * 0.5 +
-        Math.sin(this.time * 1.2) * (bounds.right - bounds.left) * 0.26;
+      const swingCenter = centerX + Math.sin(this.time * 1.2) * usableWidth * 0.18;
 
       return clamp(
         swingCenter + (Math.random() - 0.5) * 2.6,
-        bounds.left + 1.4,
-        bounds.right - 1.4,
+        minX,
+        maxX,
       );
     }
 
-    return bounds.left + 1.4 + Math.random() * (bounds.right - bounds.left - 2.8);
+    return clamp(
+      centerX + (Math.random() + Math.random() - 1) * usableWidth * 0.5,
+      minX,
+      maxX,
+    );
+  }
+
+  private resolveSpawnWeights(
+    overrides?: Partial<Record<"bell" | "bass" | "snare" | "spark", number>>,
+  ): SpawnWeights {
+    const bass = Math.max(0, overrides?.bass ?? DEFAULT_SPAWN_WEIGHTS.bass);
+    const bell = Math.max(0, overrides?.bell ?? DEFAULT_SPAWN_WEIGHTS.bell);
+    const snare = Math.max(0, overrides?.snare ?? DEFAULT_SPAWN_WEIGHTS.snare);
+    const spark = Math.max(0, overrides?.spark ?? DEFAULT_SPAWN_WEIGHTS.spark);
+    const total = bass + bell + snare + spark;
+
+    if (total <= 0.0001) {
+      return { ...DEFAULT_SPAWN_WEIGHTS };
+    }
+
+    return {
+      bass: bass / total,
+      bell: bell / total,
+      snare: snare / total,
+      spark: spark / total,
+    };
   }
 }

@@ -12,8 +12,10 @@ export const SONG1_CONFIG: SongConfig = {
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
-    { startBar: 1, lengthBars: 4, rootNote: "D", mode: "pentatonicMinor" },
-    { startBar: 5, lengthBars: 4, rootNote: "D#", mode: "pentatonicMinor" },
+    { startBar: 1, lengthBars: 2, rootNote: "F", mode: "pentatonicMajor" },
+    { startBar: 3, lengthBars: 2, rootNote: "C", mode: "pentatonicMajor" },
+    { startBar: 5, lengthBars: 2, rootNote: "F", mode: "pentatonicMajor" },
+    { startBar: 7, lengthBars: 2, rootNote: "C", mode: "pentatonicMajor" },
   ],
   grooveLevels: [
     {

@@ -2,7 +2,7 @@ import { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import { GAME_CONFIG } from "./config";
 import { InputController } from "./InputController";
 import { MusicSystem } from "./MusicSystem";
-import { SONG10_CONFIG } from "./song10";
+import type { SongConfig } from "./songConfig";
 import { Spawner } from "./Spawner";
 import { UIOverlay } from "./UIOverlay";
 import { World } from "./World";
@@ -15,6 +15,8 @@ const GROOVE_TARGET = 9;
 const MEGA_COMBO_THRESHOLD = 6.4;
 const MEGA_COMBO_COOLDOWN = 1.1;
 const MEGA_COMBO_REWARD = 2;
+const LAUNCH_COUNTDOWN_STEP_MS = 620;
+const LAUNCH_COUNTDOWN_STEPS = 4;
 
 interface FormationProgress {
   total: number;
@@ -23,7 +25,13 @@ interface FormationProgress {
   awarded: boolean;
 }
 
+interface GameAppOptions {
+  songConfig: SongConfig;
+  onSongCompleted?: () => void;
+}
+
 export class GameApp {
+  private songConfig: SongConfig;
   private world: World;
   private music = new MusicSystem();
   private spawner = new Spawner();
@@ -39,17 +47,27 @@ export class GameApp {
   private freezeSpawning = false;
   private debugLabels = false;
   private grooveCharge = 0;
-  private grooveLevels = SONG10_CONFIG.grooveLevels.map((grooveLevel) => grooveLevel.level);
+  private grooveLevels: number[] = [];
   private specialFormations = new Map<string, FormationProgress>();
   private lastBackdropBarIndex = -1;
   private lastFrameTime = performance.now();
   private megaComboCooldown = 0;
   private activeTouchPointerId: number | null = null;
   private touchPlayerTargetX: number | null = null;
+  private onSongCompleted?: () => void;
+  private launchCountdownUntil = 0;
 
-  constructor(private canvas: HTMLCanvasElement, overlayRoot: HTMLDivElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    overlayRoot: HTMLDivElement,
+    options: GameAppOptions,
+  ) {
+    this.songConfig = options.songConfig;
+    this.onSongCompleted = options.onSongCompleted;
+    this.grooveLevels = this.songConfig.grooveLevels.map((grooveLevel) => grooveLevel.level);
     this.world = new World(canvas);
-    this.music.loadSong(SONG10_CONFIG);
+    this.music.loadSong(this.songConfig);
+    this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
 
     this.input = new InputController(
       () => {
@@ -83,6 +101,11 @@ export class GameApp {
 
         if (command === "spawnRateDown") {
           this.adjustSpawnInterval(GAME_CONFIG.spawnIntervalKeyStep);
+          return;
+        }
+
+        if (command === "forceGrooveUp") {
+          this.forceGrooveLevelIncrease();
           return;
         }
 
@@ -188,9 +211,22 @@ export class GameApp {
     this.world.dispose();
   }
 
+  async beginFromSelection(): Promise<void> {
+    this.started = true;
+    this.songCompleted = false;
+    this.launchCountdownUntil = performance.now() + LAUNCH_COUNTDOWN_STEP_MS * LAUNCH_COUNTDOWN_STEPS;
+    await this.music.unlock();
+    this.overlay.playLaunchCountdown();
+  }
+
   private tick(deltaTime: number): void {
     this.megaComboCooldown = Math.max(0, this.megaComboCooldown - deltaTime);
     this.music.update();
+    const grooveLandingEvent = this.music.consumeGrooveLandingEvent();
+    if (grooveLandingEvent) {
+      this.applySpawnProfileForLevel(grooveLandingEvent.level);
+      this.overlay.triggerGrooveLandingFlash();
+    }
     this.syncSongCompletionState();
     const quarterIndex = this.music.getTransportQuarterIndex();
     if (quarterIndex !== null) {
@@ -202,6 +238,10 @@ export class GameApp {
       }
     }
     this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
+
+    if (performance.now() < this.launchCountdownUntil) {
+      return;
+    }
 
     if (this.songCompleted) {
       return;
@@ -423,6 +463,7 @@ export class GameApp {
     this.songCompleted = false;
     this.lastBackdropBarIndex = -1;
     this.music.resetGroovePlayback();
+    this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
   }
 
   private registerSpecialObject(formationId: string, total: number, objectId: number): void {
@@ -510,9 +551,26 @@ export class GameApp {
     }
   }
 
+  private forceGrooveLevelIncrease(): void {
+    const currentIndex = this.grooveLevels.indexOf(this.music.currentGrooveLevel);
+    if (currentIndex < 0 || currentIndex >= this.grooveLevels.length - 1) {
+      return;
+    }
+
+    const nextLevel = this.grooveLevels[currentIndex + 1];
+    this.grooveCharge = Math.max(this.grooveCharge, ((currentIndex + 1) / Math.max(1, this.grooveLevels.length - 1)) * GROOVE_TARGET);
+    this.music.setGrooveLevel(nextLevel);
+    this.overlay.showNoteLabel(`Groove ${nextLevel}`, this.canvas.clientWidth * 0.5, 84, "#9fedff", "banner");
+  }
+
   private getRequiredFormationCatches(total: number): number {
     const allowedMisses = total >= 18 ? 8 : total >= 10 ? 5 : 2;
     return Math.max(1, total - allowedMisses);
+  }
+
+  private applySpawnProfileForLevel(level: number): void {
+    const grooveLevel = this.songConfig.grooveLevels.find((entry) => entry.level === level);
+    this.spawner.setSpawnProfile(grooveLevel?.spawnProfile);
   }
 
   private getOverlayState(): OverlayState {
@@ -612,7 +670,9 @@ export class GameApp {
     }
 
     this.songCompleted = true;
-    this.overlay.showNoteLabel("Song Complete", this.canvas.clientWidth * 0.5, 94, "#ffca6e", "banner");
+    this.overlay.showNoteLabel("Locked In", this.canvas.clientWidth * 0.5, 94, "#ffca6e", "banner");
+    this.overlay.showNoteLabel("Track Complete", this.canvas.clientWidth * 0.5, 94, "#eaf7ff", "banner");
+    this.onSongCompleted?.();
   }
 
   private pickBackdropDirection(): Vector2 {

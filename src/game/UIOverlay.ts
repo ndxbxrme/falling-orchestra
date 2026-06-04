@@ -22,13 +22,11 @@ const ROOT_OPTIONS: RootNoteName[] = ["C", "C#", "D", "D#", "E", "F", "F#", "G",
 
 export class UIOverlay {
   private startCard!: HTMLDivElement;
-  private completionCard!: HTMLDivElement;
-  private completionTitle!: HTMLElement;
-  private completionMessage!: HTMLElement;
   private hudTop!: HTMLDivElement;
   private quickDock!: HTMLDivElement;
   private grooveBoostAlert!: HTMLDivElement;
   private grooveBoostText!: HTMLElement;
+  private flashLayer!: HTMLDivElement;
   private hypeLayer!: HTMLDivElement;
   private noteLayer!: HTMLDivElement;
   private objectCountValue!: HTMLElement;
@@ -121,9 +119,6 @@ export class UIOverlay {
     this.hudTop.classList.toggle("hidden", !state.hudVisible);
     this.quickDock.classList.toggle("hidden", !state.started);
     this.startCard.classList.toggle("hidden", state.started);
-    this.completionCard.classList.toggle("hidden", !state.songCompleted);
-    this.completionTitle.textContent = state.songCompletionTitle;
-    this.completionMessage.textContent = state.songCompletionMessage;
   }
 
   showNoteLabel(
@@ -176,6 +171,8 @@ export class UIOverlay {
           <span data-groove-boost-text>01</span>
         </div>
 
+        <div class="flash-layer" data-flash-layer></div>
+
         <div class="formation-strip floating hidden" data-formation-section>
           <div class="formation-copy">
             <strong>Special Catch</strong>
@@ -186,7 +183,7 @@ export class UIOverlay {
           </div>
         </div>
 
-        <div class="hud-top">
+        <div class="hud-top hidden">
           <section class="panel">
             <span class="eyebrow">Prototype Jam</span>
             <h1>Falling Orchestra</h1>
@@ -290,22 +287,13 @@ export class UIOverlay {
         </div>
 
         <div class="start-wrap">
-          <div class="start-card" data-start-card>
+          <div class="start-card hidden" data-start-card>
             <span class="eyebrow">Audio Unlock</span>
             <h1>Start the Prototype</h1>
             <p>Web Audio needs a gesture before it can play. Press the button below, then use <strong>A / D</strong> or drag across the playfield to shape the falling lines.</p>
             <p>Best first move: switch the mode if you want a different mood, then let the rain build until the arena starts to answer back.</p>
             <div class="button-row">
               <button type="button" data-start-button>Wake Audio and Play</button>
-            </div>
-          </div>
-
-          <div class="start-card hidden completion-card" data-completion-card>
-            <span class="eyebrow">Song Complete</span>
-            <h1 data-completion-title>Fade Reached</h1>
-            <p data-completion-message>The final one-shot has landed. Replay the song to run the whole arc again.</p>
-            <div class="button-row">
-              <button type="button" data-replay-button>Replay Song</button>
             </div>
           </div>
         </div>
@@ -316,10 +304,8 @@ export class UIOverlay {
     this.hudTop = this.query<HTMLDivElement>(".hud-top");
     this.grooveBoostAlert = this.query<HTMLDivElement>("[data-groove-boost-alert]");
     this.grooveBoostText = this.query("[data-groove-boost-text]");
+    this.flashLayer = this.query<HTMLDivElement>("[data-flash-layer]");
     this.startCard = this.query<HTMLDivElement>("[data-start-card]");
-    this.completionCard = this.query<HTMLDivElement>("[data-completion-card]");
-    this.completionTitle = this.query("[data-completion-title]");
-    this.completionMessage = this.query("[data-completion-message]");
     this.hypeLayer = this.query<HTMLDivElement>("[data-hype-layer]");
     this.noteLayer = this.query<HTMLDivElement>("[data-note-layer]");
     this.objectCountValue = this.query("[data-object-count]");
@@ -348,10 +334,6 @@ export class UIOverlay {
 
     this.query<HTMLButtonElement>("[data-start-button]").addEventListener("click", () => {
       this.callbacks.onStart();
-    });
-
-    this.query<HTMLButtonElement>("[data-replay-button]").addEventListener("click", () => {
-      this.callbacks.onReplaySong();
     });
 
     this.rootSelect.addEventListener("change", () => {
@@ -453,6 +435,28 @@ export class UIOverlay {
       }
       this.maybeShowNextBanner();
     }, 720);
+  }
+
+  triggerGrooveLandingFlash(): void {
+    const flash = document.createElement("div");
+    flash.className = "groove-landing-flash";
+    this.flashLayer.append(flash);
+
+    window.setTimeout(() => {
+      flash.remove();
+    }, 320);
+  }
+
+  playLaunchCountdown(): void {
+    this.bannerQueue = [];
+    this.activeBanner?.remove();
+    this.activeBanner = undefined;
+    const steps = ["4", "3", "2", "1"];
+    steps.forEach((step, index) => {
+      window.setTimeout(() => {
+        this.enqueueBanner(step, "#eaf7ff");
+      }, index * 620);
+    });
   }
 
   private glitchText(text: string, intensity: number): string {

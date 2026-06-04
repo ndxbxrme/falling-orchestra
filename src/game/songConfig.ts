@@ -1,4 +1,4 @@
-import type { RootNoteName, ScaleModeName } from "./types";
+import type { RootNoteName, ScaleModeName, SpawnPattern } from "./types";
 
 export type ImpactBusName = "dry" | "drive" | "delay" | "reverb" | "megaFx";
 export type ImpactVoiceMode = "stab" | "sub" | "tick" | "snare" | "mega";
@@ -13,8 +13,16 @@ export interface HarmonySpanConfig {
 export interface LoopClipConfig {
   src: string;
   bars: number;
+  grooveChangeAfterBars?: number;
   harmonyStartBar?: number;
   harmonyTimeline?: HarmonySpanConfig[];
+}
+
+export interface SpawnProfileConfig {
+  spawnInterval?: number;
+  spawnPattern?: SpawnPattern;
+  spawnCenter?: number;
+  spawnWeights?: Partial<Record<"bell" | "bass" | "snare" | "spark", number>>;
 }
 
 export interface GrooveLevelConfig {
@@ -22,6 +30,7 @@ export interface GrooveLevelConfig {
   main?: LoopClipConfig;
   intro?: LoopClipConfig;
   completesSong?: boolean;
+  spawnProfile?: SpawnProfileConfig;
 }
 
 export interface ImpactSampleLayerConfig {

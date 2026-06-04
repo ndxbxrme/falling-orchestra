@@ -189,6 +189,9 @@ export class MusicSystem {
   private transitionNoticeLevel: number | null = null;
   private transitionNoticeQueuedAt?: number;
   private transitionNoticeHandoffTime?: number;
+  private pendingGrooveLandingLevel: number | null = null;
+  private pendingGrooveLandingTime?: number;
+  private landedGrooveLevel: number | null = null;
   private scheduledLoopSources = new Set<AudioBufferSourceNode>();
   private songCompleted = false;
   private songEndingScheduled = false;
@@ -226,6 +229,8 @@ export class MusicSystem {
     this.desiredGrooveLevel = baseLevel;
     this.queuedTransitionLevel = null;
     this.clearTransitionNotice();
+    this.clearPendingGrooveLanding();
+    this.landedGrooveLevel = null;
     this.songCompleted = false;
     this.songEndingScheduled = false;
     this.nextGrooveBoundaryTime = undefined;
@@ -331,6 +336,8 @@ export class MusicSystem {
     this.desiredGrooveLevel = baseLevel;
     this.queuedTransitionLevel = null;
     this.clearTransitionNotice();
+    this.clearPendingGrooveLanding();
+    this.landedGrooveLevel = null;
     this.songCompleted = false;
     this.songEndingScheduled = false;
     this.resetImpactMixLevel();
@@ -458,6 +465,16 @@ export class MusicSystem {
     };
   }
 
+  consumeGrooveLandingEvent(): { level: number } | null {
+    if (this.landedGrooveLevel === null) {
+      return null;
+    }
+
+    const level = this.landedGrooveLevel;
+    this.landedGrooveLevel = null;
+    return { level };
+  }
+
   update(): void {
     if (!this.audioContext || !this.masterGain) {
       return;
@@ -471,6 +488,17 @@ export class MusicSystem {
     const eighthDuration = quarterDuration / 2;
     const barDuration = quarterDuration * this.beatsPerBar;
     const now = this.audioContext.currentTime;
+    if (
+      this.pendingGrooveLandingLevel !== null &&
+      this.pendingGrooveLandingTime !== undefined &&
+      now >= this.pendingGrooveLandingTime
+    ) {
+      this.currentGrooveLevel = this.pendingGrooveLandingLevel;
+      this.desiredGrooveLevel = this.pendingGrooveLandingLevel;
+      this.landedGrooveLevel = this.pendingGrooveLandingLevel;
+      this.clearPendingGrooveLanding();
+      this.clearTransitionNotice();
+    }
     if (this.transitionNoticeHandoffTime !== undefined && now >= this.transitionNoticeHandoffTime) {
       this.clearTransitionNotice();
     }
@@ -818,13 +846,24 @@ export class MusicSystem {
     this.transitionNoticeHandoffTime = undefined;
   }
 
+  private setPendingGrooveLanding(level: number, landingTime: number): void {
+    this.pendingGrooveLandingLevel = level;
+    this.pendingGrooveLandingTime = landingTime;
+  }
+
+  private clearPendingGrooveLanding(): void {
+    this.pendingGrooveLandingLevel = null;
+    this.pendingGrooveLandingTime = undefined;
+  }
+
   private getGrooveTransitionHandoffTime(level: number, boundaryTime: number): number {
     const intro = this.grooveLevels.get(level)?.intro;
     if (!intro) {
       return boundaryTime;
     }
 
-    return boundaryTime + this.getClipDuration(intro) * 0.5;
+    const clampedBars = clamp(intro.grooveChangeAfterBars ?? 2, 0, intro.bars);
+    return boundaryTime + (60 / this.bpm) * this.beatsPerBar * clampedBars;
   }
 
   private primeTransport(startTime: number): void {
@@ -878,7 +917,9 @@ export class MusicSystem {
 
       if (intro) {
         const introEndTime = when + this.getClipDuration(intro);
-        this.transitionNoticeHandoffTime = this.getGrooveTransitionHandoffTime(nextLevel, when);
+        const grooveLandingTime = this.getGrooveTransitionHandoffTime(nextLevel, when);
+        this.transitionNoticeHandoffTime = grooveLandingTime;
+        this.setPendingGrooveLanding(nextLevel, grooveLandingTime);
         if (grooveLevel?.completesSong) {
           this.scheduleImpactFadeOut(when, this.getClipDuration(intro));
         }
@@ -920,9 +961,8 @@ export class MusicSystem {
 
       if (main) {
         this.clearTransitionNotice();
+        this.setPendingGrooveLanding(nextLevel, when);
         this.scheduleGrooveClip(nextLevel, "main", when);
-        this.currentGrooveLevel = nextLevel;
-        this.desiredGrooveLevel = nextLevel;
         this.nextGrooveBoundaryTime = when + this.getClipDuration(main);
         return;
       }
