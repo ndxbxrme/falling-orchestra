@@ -6,6 +6,11 @@ export const PLAYLISTS: Playlist[] = [
     title: "Recommended",
     kind: "system",
     description: "Fast entry points into the library.",
-    songIds: ["song10", "song2", "song6", "song1"],
+    songIds: [
+      "sector-seven_running-its-course",
+      "sector-seven_fatman",
+      "sector-seven_pablo",
+      "sector-seven_giant-reset",
+    ],
   },
 ];

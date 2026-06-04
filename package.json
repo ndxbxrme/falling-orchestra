@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --port 5177",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "validate:content": "python3 scripts/validate_content.py",
+    "scaffold:content": "python3 scripts/scaffold_content.py",
+    "hydrate:song": "python3 scripts/hydrate_song_config.py"
   },
   "dependencies": {
     "@babylonjs/core": "^8.13.1"

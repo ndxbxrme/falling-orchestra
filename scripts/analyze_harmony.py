@@ -45,8 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "targets",
         nargs="*",
-        default=["audio"],
-        help="Song folders or audio root to scan. Defaults to ./audio",
+        default=["src/content/albums"],
+        help="Song folders, album folders, or content roots to scan. Defaults to ./src/content/albums",
     )
     parser.add_argument(
         "--output",
@@ -76,9 +76,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[1]
-    audio_root = repo_root / "audio"
-    config_root = repo_root / "src" / "game"
-    targets = resolve_targets(repo_root, audio_root, args.targets)
+    content_root = repo_root / "src" / "content" / "albums"
+    targets = resolve_targets(repo_root, content_root, args.targets)
 
     report_lines = [
         "# Harmony Suggestions",
@@ -92,8 +91,8 @@ def main() -> None:
     report_json: dict[str, object] = {"songs": {}}
 
     for target in targets:
-        transport = resolve_transport(target, config_root, args.bpm, args.beats_per_bar)
-        song_name = target.name
+        transport = resolve_transport(target, args.bpm, args.beats_per_bar)
+        song_name = target.parent.name
         report_lines.extend(
             [
                 f"## {song_name}",
@@ -126,25 +125,27 @@ def main() -> None:
     print(f"Wrote {json_path.relative_to(repo_root)}")
 
 
-def resolve_targets(repo_root: Path, audio_root: Path, raw_targets: Iterable[str]) -> list[Path]:
+def resolve_targets(repo_root: Path, content_root: Path, raw_targets: Iterable[str]) -> list[Path]:
     resolved: list[Path] = []
     for raw_target in raw_targets:
         path = (repo_root / raw_target).resolve()
-        if path == audio_root.resolve():
-            resolved.extend(sorted(p for p in audio_root.iterdir() if p.is_dir()))
+        if path == content_root.resolve():
+            resolved.extend(sorted(p for p in content_root.glob("*/songs/*/audio") if p.is_dir()))
             continue
         if path.is_dir():
-            resolved.append(path)
+            if any(path.glob("*.ogg")):
+                resolved.append(path)
+                continue
+            resolved.extend(sorted(p for p in path.glob("songs/*/audio") if p.is_dir()))
     return resolved
 
 
 def resolve_transport(
     song_dir: Path,
-    config_root: Path,
     fallback_bpm: float | None,
     fallback_beats_per_bar: int,
 ) -> Transport:
-    config_path = config_root / f"{song_dir.name}.ts"
+    config_path = song_dir.parent / "config.ts"
     if config_path.exists():
         text = config_path.read_text(encoding="utf-8")
         bpm_match = re.search(r"bpm:\s*([0-9]+(?:\.[0-9]+)?)", text)

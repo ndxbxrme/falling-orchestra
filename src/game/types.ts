@@ -25,6 +25,7 @@ export type RootNoteName =
   | "A"
   | "A#"
   | "B";
+export type GameSessionPhase = "idle" | "countdown" | "playing" | "ending" | "completed";
 
 export interface ArenaBounds {
   left: number;
@@ -83,11 +84,10 @@ export interface PlayedNote {
 }
 
 export interface OverlayState {
-  started: boolean;
-  songCompleted: boolean;
-  songCompletionTitle: string;
-  songCompletionMessage: string;
+  sessionPhase: GameSessionPhase;
   activeObjects: number;
+  fps: number;
+  frameTimeMs: number;
   rootNote: RootNoteName;
   mode: ScaleModeName;
   liveMode: boolean;
@@ -102,6 +102,8 @@ export interface OverlayState {
   grooveBoostIncoming: boolean;
   grooveBoostTargetLevel: number | null;
   grooveBoostIntensity: number;
+  endingIncoming: boolean;
+  endingIntensity: number;
   activeFormationCaught: number;
   activeFormationRequired: number;
   activeFormationVisible: boolean;

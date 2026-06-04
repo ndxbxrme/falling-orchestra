@@ -30,6 +30,7 @@ export class UIOverlay {
   private hypeLayer!: HTMLDivElement;
   private noteLayer!: HTMLDivElement;
   private objectCountValue!: HTMLElement;
+  private perfValue!: HTMLElement;
   private modeValue!: HTMLElement;
   private densityValue!: HTMLElement;
   private grooveValue!: HTMLElement;
@@ -61,12 +62,16 @@ export class UIOverlay {
 
   update(state: OverlayState): void {
     this.objectCountValue.textContent = String(state.activeObjects);
+    this.perfValue.textContent = `${state.fps.toFixed(0)} FPS / ${state.frameTimeMs.toFixed(1)}ms`;
     this.modeValue.textContent = `${state.rootNote} ${MODE_LABELS[state.mode]}`;
     this.densityValue.textContent = `${state.spawnPattern} / ${state.spawnLiveInterval.toFixed(2)}s`;
     this.grooveValue.textContent = `${state.grooveCharge} / ${state.grooveTarget}`;
     this.layerValue.textContent = state.grooveLayerLabel;
-    this.grooveBoostAlert.classList.toggle("incoming", state.grooveBoostIncoming);
-    if (state.grooveBoostIncoming) {
+    this.grooveBoostAlert.classList.toggle("incoming", state.grooveBoostIncoming || state.endingIncoming);
+    if (state.endingIncoming) {
+      this.grooveBoostText.textContent = this.glitchText("LAST TRANSISSION", state.endingIntensity);
+      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", state.endingIntensity.toFixed(3));
+    } else if (state.grooveBoostIncoming) {
       const alertText =
         state.grooveBoostTargetLevel === null
           ? "GROOVE BOOST INCOMING"
@@ -117,8 +122,9 @@ export class UIOverlay {
     this.freezeToggle.checked = state.freezeSpawning;
     this.debugToggle.checked = state.debugLabels;
     this.hudTop.classList.toggle("hidden", !state.hudVisible);
-    this.quickDock.classList.toggle("hidden", !state.started);
-    this.startCard.classList.toggle("hidden", state.started);
+    const sessionStarted = state.sessionPhase !== "idle";
+    this.quickDock.classList.toggle("hidden", !sessionStarted);
+    this.startCard.classList.toggle("hidden", sessionStarted);
   }
 
   showNoteLabel(
@@ -195,12 +201,16 @@ export class UIOverlay {
                 <span>Active objects</span>
               </div>
               <div class="status-card">
+                <strong data-perf-value>60 FPS / 16.7ms</strong>
+                <span>Frame pacing</span>
+              </div>
+              <div class="status-card">
                 <strong data-mode-value>C Major / Ionian</strong>
                 <span>Current harmony</span>
               </div>
               <div class="status-card">
                 <strong data-density-value>rain / 0.82s</strong>
-                <span>Live spawn rate</span>
+                <span>Spawner</span>
               </div>
               <div class="status-card">
                 <strong data-groove-value>0 / 9</strong>
@@ -309,6 +319,7 @@ export class UIOverlay {
     this.hypeLayer = this.query<HTMLDivElement>("[data-hype-layer]");
     this.noteLayer = this.query<HTMLDivElement>("[data-note-layer]");
     this.objectCountValue = this.query("[data-object-count]");
+    this.perfValue = this.query("[data-perf-value]");
     this.modeValue = this.query("[data-mode-value]");
     this.densityValue = this.query("[data-density-value]");
     this.grooveValue = this.query("[data-groove-value]");

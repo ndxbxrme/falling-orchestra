@@ -60,6 +60,118 @@ git push origin v0.1.0
 - `src/game/UIOverlay.ts`: DOM-based controls, HUD, start card, and floating note labels
 - `src/game/config.ts`: centralized tuning constants, modes, roots, and object definitions
 
+## Content Authoring
+
+Albums and songs now live in packaged content folders under `src/content` rather than being split across unrelated directories.
+
+### Package Layout
+
+```txt
+src/content/
+  artists/
+    <artist-id>/
+      artist.ts
+  albums/
+    <album-id>/
+      album.ts
+      cover.png
+      songs/
+        <song-slug>/
+          song.ts
+          config.ts
+          audio/
+            *.ogg
+```
+
+- `artist.ts`: artist metadata
+- `album.ts`: album metadata, theme, cover reference, `songIds`, and recommended song
+- `song.ts`: library-facing song manifest
+- `config.ts`: low-level `SongConfig` for loops, harmony, spawns, FX, and progression
+- `audio/`: loop assets for that song only
+
+### Scaffolder
+
+Use the scaffolder to create new album and song packages:
+
+```bash
+npm run scaffold:content -- album \
+  --artist-id sector-seven \
+  --title "Second Album" \
+  --year 2026 \
+  --tags "dark,techno"
+```
+
+```bash
+npm run scaffold:content -- song \
+  --album-id sector-seven_second-album \
+  --title "New Track" \
+  --track-number 1
+```
+
+Notes:
+
+- `--dry-run` works before or after the subcommand.
+- scaffolded songs default to `hidden`
+- scaffolded songs create zero-byte placeholder `01i.ogg` / `01m.ogg` files
+- replace placeholder audio before making a song visible
+
+Album scaffolding will:
+
+- create the artist manifest if needed
+- create the album package and empty `songs/` folder
+- regenerate the content index files
+
+Song scaffolding will:
+
+- create `song.ts`, `config.ts`, and `audio/`
+- update the parent album `songIds`
+- set `recommendedSongId` if the album does not have one yet
+- regenerate song and album index files
+
+### Song Hydration
+
+Once a song package exists and real loop files have been copied into its `audio/` folder, you can hydrate `config.ts` from the clips:
+
+```bash
+npm run hydrate:song -- \
+  --album-id sector-seven_second-album \
+  --song-slug new-track
+```
+
+Useful flags:
+
+- `--dry-run`: print the inferred BPM / bar lengths without writing `config.ts`
+- `--song-dir`: target a song package directly instead of using `--album-id` + `--song-slug`
+- `--bpm-min`, `--bpm-max`, `--bpm-step`: tune the BPM search range
+
+The hydrator currently rewrites:
+
+- `transport.bpm`
+- `transport.beatsPerBar`
+- `transport.barsPerLoop`
+- `grooveLevels`
+
+It leaves `harmonyTimeline`, `impactPalette`, and other hand-authored config sections alone.
+
+### Validation
+
+Validate packaged content with:
+
+```bash
+npm run validate:content
+```
+
+The validator checks:
+
+- duplicate artist / album / song ids
+- bad album or artist references
+- missing `song.ts`, `config.ts`, `audio/`, or referenced assets
+- duplicate track numbers within an album
+- broken `recommendedSongId`
+- placeholder zero-byte `.ogg` files
+
+At the moment, loose staging folders without an `album.ts` manifest are reported as warnings rather than errors.
+
 ## Known Limitations
 
 - Physics are custom and intentionally simple, so rare edge-case overlaps can still happen under heavy object density.

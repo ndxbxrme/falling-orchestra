@@ -6,7 +6,15 @@ import type { SongConfig } from "./songConfig";
 import { Spawner } from "./Spawner";
 import { UIOverlay } from "./UIOverlay";
 import { World } from "./World";
-import type { MusicalObject, OverlayState, RootNoteName, ScaleModeName, SpawnPattern, Surface } from "./types";
+import type {
+  GameSessionPhase,
+  MusicalObject,
+  OverlayState,
+  RootNoteName,
+  ScaleModeName,
+  SpawnPattern,
+  Surface,
+} from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -38,8 +46,7 @@ export class GameApp {
   private input: InputController;
   private overlay: UIOverlay;
   private playerX = 0;
-  private started = false;
-  private songCompleted = false;
+  private sessionPhase: GameSessionPhase = "idle";
   private paused = false;
   private muted = false;
   private liveMode = false;
@@ -55,7 +62,9 @@ export class GameApp {
   private activeTouchPointerId: number | null = null;
   private touchPlayerTargetX: number | null = null;
   private onSongCompleted?: () => void;
-  private launchCountdownUntil = 0;
+  private launchCountdownEndsAt = 0;
+  private smoothedFrameTimeMs = 16.7;
+  private smoothedFps = 60;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -190,6 +199,10 @@ export class GameApp {
       const now = performance.now();
       const deltaTime = Math.min((now - this.lastFrameTime) / 1000, GAME_CONFIG.maxDeltaTime);
       this.lastFrameTime = now;
+      const frameTimeMs = Math.max(0.1, deltaTime * 1000);
+      const perfFollow = 0.12;
+      this.smoothedFrameTimeMs += (frameTimeMs - this.smoothedFrameTimeMs) * perfFollow;
+      this.smoothedFps += ((1000 / frameTimeMs) - this.smoothedFps) * perfFollow;
 
       if (!this.paused) {
         this.tick(deltaTime);
@@ -212,9 +225,8 @@ export class GameApp {
   }
 
   async beginFromSelection(): Promise<void> {
-    this.started = true;
-    this.songCompleted = false;
-    this.launchCountdownUntil = performance.now() + LAUNCH_COUNTDOWN_STEP_MS * LAUNCH_COUNTDOWN_STEPS;
+    this.setSessionPhase("countdown");
+    this.launchCountdownEndsAt = performance.now() + LAUNCH_COUNTDOWN_STEP_MS * LAUNCH_COUNTDOWN_STEPS;
     await this.music.unlock();
     this.overlay.playLaunchCountdown();
   }
@@ -222,6 +234,7 @@ export class GameApp {
   private tick(deltaTime: number): void {
     this.megaComboCooldown = Math.max(0, this.megaComboCooldown - deltaTime);
     this.music.update();
+    const endingState = this.music.getEndingState();
     const grooveLandingEvent = this.music.consumeGrooveLandingEvent();
     if (grooveLandingEvent) {
       this.applySpawnProfileForLevel(grooveLandingEvent.level);
@@ -238,12 +251,21 @@ export class GameApp {
       }
     }
     this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
+    this.world.setEndingState(endingState?.progress ?? 0, endingState?.intensity ?? 0);
 
-    if (performance.now() < this.launchCountdownUntil) {
+    if (this.sessionPhase === "countdown" && performance.now() >= this.launchCountdownEndsAt) {
+      this.setSessionPhase("playing");
+    }
+
+    if (this.sessionPhase === "playing" && endingState !== null) {
+      this.setSessionPhase("ending");
+    }
+
+    if (this.sessionPhase === "countdown" && performance.now() < this.launchCountdownEndsAt) {
       return;
     }
 
-    if (this.songCompleted) {
+    if (this.sessionPhase === "completed") {
       return;
     }
 
@@ -257,7 +279,7 @@ export class GameApp {
     this.playerX = this.world.clampPlayerX(this.playerX);
     this.world.setPlayerX(this.playerX);
 
-    this.spawner.frozen = this.freezeSpawning;
+    this.spawner.frozen = this.freezeSpawning || endingState !== null;
     const requests = this.spawner.update(deltaTime, bounds, this.world.getObjectCount());
     for (const request of requests) {
       const object = this.world.spawnObject(
@@ -290,8 +312,9 @@ export class GameApp {
 
   private async unlockAudio(): Promise<void> {
     await this.music.unlock();
-    this.started = true;
-    this.songCompleted = false;
+    if (this.sessionPhase === "idle") {
+      this.setSessionPhase("playing");
+    }
   }
 
   private handleCanvasPointerDown = (event: PointerEvent): void => {
@@ -460,7 +483,8 @@ export class GameApp {
     this.specialFormations.clear();
     this.megaComboCooldown = 0;
     this.grooveCharge = 0;
-    this.songCompleted = false;
+    this.setSessionPhase("playing");
+    this.launchCountdownEndsAt = 0;
     this.lastBackdropBarIndex = -1;
     this.music.resetGroovePlayback();
     this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
@@ -575,13 +599,13 @@ export class GameApp {
 
   private getOverlayState(): OverlayState {
     const pendingGrooveBoost = this.music.getPendingGrooveBoost();
+    const endingState = this.music.getEndingState();
 
     return {
-      started: this.started,
-      songCompleted: this.songCompleted,
-      songCompletionTitle: "Fade Reached",
-      songCompletionMessage: "The final one-shot has landed. Replay the song to run the whole arc again.",
+      sessionPhase: this.sessionPhase,
       activeObjects: this.world.getObjectCount(),
+      fps: this.smoothedFps,
+      frameTimeMs: this.smoothedFrameTimeMs,
       rootNote: this.music.rootNote,
       mode: this.music.mode,
       liveMode: this.liveMode,
@@ -596,6 +620,8 @@ export class GameApp {
       grooveBoostIncoming: pendingGrooveBoost !== null,
       grooveBoostTargetLevel: pendingGrooveBoost?.targetLevel ?? null,
       grooveBoostIntensity: pendingGrooveBoost?.intensity ?? 0,
+      endingIncoming: endingState !== null,
+      endingIntensity: endingState?.intensity ?? 0,
       activeFormationCaught: this.getActiveFormationSummary().caught,
       activeFormationRequired: this.getActiveFormationSummary().required,
       activeFormationVisible: this.getActiveFormationSummary().visible,
@@ -633,8 +659,12 @@ export class GameApp {
   }
 
   private getGrooveLayerLabel(): string {
-    if (this.songCompleted) {
+    if (this.sessionPhase === "completed") {
       return "Song Complete";
+    }
+
+    if (this.sessionPhase === "ending") {
+      return "Ending";
     }
 
     const targetLevel = this.getGrooveLevelForCharge(this.grooveCharge);
@@ -665,14 +695,18 @@ export class GameApp {
 
   private syncSongCompletionState(): void {
     const songCompleted = this.music.isSongCompleted();
-    if (!songCompleted || this.songCompleted) {
+    if (!songCompleted || this.sessionPhase === "completed") {
       return;
     }
 
-    this.songCompleted = true;
+    this.setSessionPhase("completed");
     this.overlay.showNoteLabel("Locked In", this.canvas.clientWidth * 0.5, 94, "#ffca6e", "banner");
     this.overlay.showNoteLabel("Track Complete", this.canvas.clientWidth * 0.5, 94, "#eaf7ff", "banner");
     this.onSongCompleted?.();
+  }
+
+  private setSessionPhase(phase: GameSessionPhase): void {
+    this.sessionPhase = phase;
   }
 
   private pickBackdropDirection(): Vector2 {

@@ -192,6 +192,8 @@ export class MusicSystem {
   private pendingGrooveLandingLevel: number | null = null;
   private pendingGrooveLandingTime?: number;
   private landedGrooveLevel: number | null = null;
+  private endingStartedAt?: number;
+  private endingCompletesAt?: number;
   private scheduledLoopSources = new Set<AudioBufferSourceNode>();
   private songCompleted = false;
   private songEndingScheduled = false;
@@ -231,6 +233,8 @@ export class MusicSystem {
     this.clearTransitionNotice();
     this.clearPendingGrooveLanding();
     this.landedGrooveLevel = null;
+    this.endingStartedAt = undefined;
+    this.endingCompletesAt = undefined;
     this.songCompleted = false;
     this.songEndingScheduled = false;
     this.nextGrooveBoundaryTime = undefined;
@@ -338,6 +342,8 @@ export class MusicSystem {
     this.clearTransitionNotice();
     this.clearPendingGrooveLanding();
     this.landedGrooveLevel = null;
+    this.endingStartedAt = undefined;
+    this.endingCompletesAt = undefined;
     this.songCompleted = false;
     this.songEndingScheduled = false;
     this.resetImpactMixLevel();
@@ -462,6 +468,30 @@ export class MusicSystem {
     return {
       targetLevel: this.transitionNoticeLevel,
       intensity: 0.16 + progress * 0.84,
+    };
+  }
+
+  getEndingState(): { progress: number; intensity: number } | null {
+    if (
+      !this.audioContext ||
+      this.songCompleted ||
+      this.endingStartedAt === undefined ||
+      this.endingCompletesAt === undefined
+    ) {
+      return null;
+    }
+
+    const now = this.audioContext.currentTime;
+    if (now >= this.endingCompletesAt) {
+      return null;
+    }
+
+    const totalWindow = Math.max(0.001, this.endingCompletesAt - this.endingStartedAt);
+    const progress = clamp((now - this.endingStartedAt) / totalWindow, 0, 1);
+
+    return {
+      progress,
+      intensity: 0.22 + progress * 0.78,
     };
   }
 
@@ -921,6 +951,8 @@ export class MusicSystem {
         this.transitionNoticeHandoffTime = grooveLandingTime;
         this.setPendingGrooveLanding(nextLevel, grooveLandingTime);
         if (grooveLevel?.completesSong) {
+          this.endingStartedAt = when;
+          this.endingCompletesAt = introEndTime;
           this.scheduleImpactFadeOut(when, this.getClipDuration(intro));
         }
         this.scheduleGrooveClip(nextLevel, "intro", when, {
@@ -928,6 +960,8 @@ export class MusicSystem {
             ? () => {
                 this.songCompleted = true;
                 this.songEndingScheduled = false;
+                this.endingStartedAt = undefined;
+                this.endingCompletesAt = undefined;
                 this.queuedTransitionLevel = null;
                 this.desiredGrooveLevel = nextLevel;
                 this.nextGrooveBoundaryTime = undefined;
