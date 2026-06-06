@@ -62,13 +62,6 @@ export const SONG3_CONFIG: SongConfig = {
     },
     {
       level: 5,
-      intro: {
-        src: assetUrl("05i.ogg"),
-        bars: 4,
-      },
-    },
-    {
-      level: 6,
       main: {
         src: assetUrl("06m.ogg"),
         bars: 4,
@@ -79,7 +72,7 @@ export const SONG3_CONFIG: SongConfig = {
       },
     },
     {
-      level: 7,
+      level: 6,
       main: {
         src: assetUrl("07m.ogg"),
         bars: 4,
@@ -90,7 +83,7 @@ export const SONG3_CONFIG: SongConfig = {
       },
     },
     {
-      level: 8,
+      level: 7,
       main: {
         src: assetUrl("08m.ogg"),
         bars: 4,
@@ -101,7 +94,7 @@ export const SONG3_CONFIG: SongConfig = {
       },
     },
     {
-      level: 9,
+      level: 8,
       main: {
         src: assetUrl("09m.ogg"),
         bars: 4,
@@ -112,7 +105,7 @@ export const SONG3_CONFIG: SongConfig = {
       },
     },
     {
-      level: 10,
+      level: 9,
       main: {
         src: assetUrl("10m.ogg"),
         bars: 4,
@@ -123,7 +116,7 @@ export const SONG3_CONFIG: SongConfig = {
       },
     },
     {
-      level: 11,
+      level: 10,
       main: {
         src: assetUrl("11m.ogg"),
         bars: 4,
@@ -134,7 +127,7 @@ export const SONG3_CONFIG: SongConfig = {
       },
     },
     {
-      level: 12,
+      level: 11,
       intro: {
         src: assetUrl("12i.ogg"),
         bars: 8,

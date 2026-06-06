@@ -55,6 +55,7 @@ export class Spawner {
   private specialBurst: SpecialBurst | null = null;
   private nextSpecialId = 0;
   private megaQueued = false;
+  private endingTaperProgress: number | null = null;
 
   update(deltaTime: number, bounds: ArenaBounds, activeObjects: number): SpawnRequest[] {
     this.time += deltaTime;
@@ -64,10 +65,11 @@ export class Spawner {
     }
 
     const requests: SpawnRequest[] = [];
+    const effectiveInterval = this.getEffectiveInterval();
     this.nextSpawnIn -= deltaTime;
 
     while (this.nextSpawnIn <= 0 && activeObjects + requests.length < GAME_CONFIG.maxObjects) {
-      this.nextSpawnIn += this.currentInterval;
+      this.nextSpawnIn += effectiveInterval;
       requests.push({
         type: this.pickType(),
         x: this.pickX(bounds),
@@ -123,6 +125,7 @@ export class Spawner {
     this.specialBurst = null;
     this.nextSpecialId = 0;
     this.megaQueued = false;
+    this.endingTaperProgress = null;
   }
 
   setSpawnProfile(profile?: SpawnProfileConfig): void {
@@ -148,8 +151,17 @@ export class Spawner {
 
     this.rateWindowIndex = nextWindow;
     this.currentInterval = this.randomizedWindowInterval();
-    this.nextSpawnIn = Math.min(this.nextSpawnIn, this.currentInterval);
+    this.nextSpawnIn = Math.min(this.nextSpawnIn, this.getEffectiveInterval());
     this.maybeQueueSpecialBurst(quarterIndex, activeObjects);
+  }
+
+  setEndingTaper(progress: number | null): void {
+    this.endingTaperProgress = progress === null ? null : clamp(progress, 0, 1);
+    if (this.endingTaperProgress !== null) {
+      this.specialBurst = null;
+      this.megaQueued = false;
+      this.nextSpawnIn = Math.min(this.nextSpawnIn, this.getEffectiveInterval());
+    }
   }
 
   private randomizedWindowInterval(): number {
@@ -162,7 +174,12 @@ export class Spawner {
   }
 
   private maybeQueueSpecialBurst(quarterIndex: number, activeObjects: number): void {
-    if (this.specialBurst || activeObjects > GAME_CONFIG.maxObjects - 10 || quarterIndex <= 0) {
+    if (
+      this.endingTaperProgress !== null ||
+      this.specialBurst ||
+      activeObjects > GAME_CONFIG.maxObjects - 10 ||
+      quarterIndex <= 0
+    ) {
       return;
     }
 
@@ -404,5 +421,17 @@ export class Spawner {
       snare: snare / total,
       spark: spark / total,
     };
+  }
+
+  private getEffectiveInterval(): number {
+    if (this.endingTaperProgress === null) {
+      return this.currentInterval;
+    }
+
+    return clamp(
+      this.currentInterval * (1 + this.endingTaperProgress * 2.8),
+      GAME_CONFIG.spawnIntervalSafeMin,
+      GAME_CONFIG.spawnIntervalMax * 1.6,
+    );
   }
 }

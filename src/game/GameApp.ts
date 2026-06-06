@@ -14,6 +14,7 @@ import type {
   ScaleModeName,
   SpawnPattern,
   Surface,
+  TransitionState,
 } from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
@@ -25,6 +26,7 @@ const MEGA_COMBO_COOLDOWN = 1.1;
 const MEGA_COMBO_REWARD = 2;
 const LAUNCH_COUNTDOWN_STEP_MS = 620;
 const LAUNCH_COUNTDOWN_STEPS = 4;
+const GROOVE_LANDING_AFTERGLOW_MS = 520;
 
 interface FormationProgress {
   total: number;
@@ -65,6 +67,9 @@ export class GameApp {
   private launchCountdownEndsAt = 0;
   private smoothedFrameTimeMs = 16.7;
   private smoothedFps = 60;
+  private transitionState: TransitionState = { kind: "none" };
+  private grooveLandingEndsAt = 0;
+  private grooveLandingLevel: number | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -235,11 +240,16 @@ export class GameApp {
     this.megaComboCooldown = Math.max(0, this.megaComboCooldown - deltaTime);
     this.music.update();
     const endingState = this.music.getEndingState();
+    const pendingGrooveBoost = this.music.getPendingGrooveBoost();
     const grooveLandingEvent = this.music.consumeGrooveLandingEvent();
     if (grooveLandingEvent) {
       this.applySpawnProfileForLevel(grooveLandingEvent.level);
+      this.grooveLandingLevel = grooveLandingEvent.level;
+      this.grooveLandingEndsAt = performance.now() + GROOVE_LANDING_AFTERGLOW_MS;
       this.overlay.triggerGrooveLandingFlash();
+      this.overlay.showNoteLabel(`Groove ${grooveLandingEvent.level} Live`, this.canvas.clientWidth * 0.5, 84, "#c8f6ff", "banner");
     }
+    this.syncTransitionState(pendingGrooveBoost, endingState);
     this.syncSongCompletionState();
     const quarterIndex = this.music.getTransportQuarterIndex();
     if (quarterIndex !== null) {
@@ -252,6 +262,7 @@ export class GameApp {
     }
     this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
     this.world.setEndingState(endingState?.progress ?? 0, endingState?.intensity ?? 0);
+    this.world.setTransitionState(this.transitionState);
 
     if (this.sessionPhase === "countdown" && performance.now() >= this.launchCountdownEndsAt) {
       this.setSessionPhase("playing");
@@ -279,7 +290,8 @@ export class GameApp {
     this.playerX = this.world.clampPlayerX(this.playerX);
     this.world.setPlayerX(this.playerX);
 
-    this.spawner.frozen = this.freezeSpawning || endingState !== null;
+    this.spawner.setEndingTaper(endingState?.progress ?? null);
+    this.spawner.frozen = this.freezeSpawning || (endingState?.progress ?? 0) >= 0.72;
     const requests = this.spawner.update(deltaTime, bounds, this.world.getObjectCount());
     for (const request of requests) {
       const object = this.world.spawnObject(
@@ -486,6 +498,9 @@ export class GameApp {
     this.setSessionPhase("playing");
     this.launchCountdownEndsAt = 0;
     this.lastBackdropBarIndex = -1;
+    this.transitionState = { kind: "none" };
+    this.grooveLandingEndsAt = 0;
+    this.grooveLandingLevel = null;
     this.music.resetGroovePlayback();
     this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
   }
@@ -598,11 +613,9 @@ export class GameApp {
   }
 
   private getOverlayState(): OverlayState {
-    const pendingGrooveBoost = this.music.getPendingGrooveBoost();
-    const endingState = this.music.getEndingState();
-
     return {
       sessionPhase: this.sessionPhase,
+      transitionState: this.transitionState,
       activeObjects: this.world.getObjectCount(),
       fps: this.smoothedFps,
       frameTimeMs: this.smoothedFrameTimeMs,
@@ -617,11 +630,6 @@ export class GameApp {
       grooveTarget: GROOVE_TARGET,
       grooveLevel: this.music.currentGrooveLevel,
       grooveLayerLabel: this.getGrooveLayerLabel(),
-      grooveBoostIncoming: pendingGrooveBoost !== null,
-      grooveBoostTargetLevel: pendingGrooveBoost?.targetLevel ?? null,
-      grooveBoostIntensity: pendingGrooveBoost?.intensity ?? 0,
-      endingIncoming: endingState !== null,
-      endingIntensity: endingState?.intensity ?? 0,
       activeFormationCaught: this.getActiveFormationSummary().caught,
       activeFormationRequired: this.getActiveFormationSummary().required,
       activeFormationVisible: this.getActiveFormationSummary().visible,
@@ -664,7 +672,15 @@ export class GameApp {
     }
 
     if (this.sessionPhase === "ending") {
-      return "Ending";
+      return "Final Pass";
+    }
+
+    if (this.transitionState.kind === "grooveLanding") {
+      return `Groove ${this.transitionState.level} Live`;
+    }
+
+    if (this.transitionState.kind === "grooveBuild") {
+      return `Groove ${this.music.currentGrooveLevel} -> ${this.transitionState.targetLevel}`;
     }
 
     const targetLevel = this.getGrooveLevelForCharge(this.grooveCharge);
@@ -703,6 +719,49 @@ export class GameApp {
     this.overlay.showNoteLabel("Locked In", this.canvas.clientWidth * 0.5, 94, "#ffca6e", "banner");
     this.overlay.showNoteLabel("Track Complete", this.canvas.clientWidth * 0.5, 94, "#eaf7ff", "banner");
     this.onSongCompleted?.();
+  }
+
+  private syncTransitionState(
+    pendingGrooveBoost: ReturnType<MusicSystem["getPendingGrooveBoost"]>,
+    endingState: ReturnType<MusicSystem["getEndingState"]>,
+  ): void {
+    if (endingState) {
+      this.transitionState = {
+        kind: "songEnding",
+        progress: endingState.progress,
+        intensity: endingState.intensity,
+      };
+      return;
+    }
+
+    if (this.grooveLandingLevel !== null && performance.now() < this.grooveLandingEndsAt) {
+      const progress = 1 - (this.grooveLandingEndsAt - performance.now()) / GROOVE_LANDING_AFTERGLOW_MS;
+      this.transitionState = {
+        kind: "grooveLanding",
+        level: this.grooveLandingLevel,
+        progress: clamp(progress, 0, 1),
+        intensity: 1 - clamp(progress, 0, 1) * 0.72,
+      };
+      return;
+    }
+
+    if (this.grooveLandingLevel !== null) {
+      this.grooveLandingLevel = null;
+      this.grooveLandingEndsAt = 0;
+    }
+
+    if (pendingGrooveBoost) {
+      const progress = clamp((pendingGrooveBoost.intensity - 0.16) / 0.84, 0, 1);
+      this.transitionState = {
+        kind: "grooveBuild",
+        targetLevel: pendingGrooveBoost.targetLevel,
+        progress,
+        intensity: pendingGrooveBoost.intensity,
+      };
+      return;
+    }
+
+    this.transitionState = { kind: "none" };
   }
 
   private setSessionPhase(phase: GameSessionPhase): void {

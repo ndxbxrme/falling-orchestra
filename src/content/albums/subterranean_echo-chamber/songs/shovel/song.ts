@@ -16,6 +16,6 @@ export const SHOVEL_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG2_CONFIG,
 };

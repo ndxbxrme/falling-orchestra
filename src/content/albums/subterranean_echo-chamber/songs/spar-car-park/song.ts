@@ -16,6 +16,6 @@ export const SPAR_CAR_PARK_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG9_CONFIG,
 };

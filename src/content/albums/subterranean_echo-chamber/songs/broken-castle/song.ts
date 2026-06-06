@@ -16,6 +16,6 @@ export const BROKEN_CASTLE_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG3_CONFIG,
 };

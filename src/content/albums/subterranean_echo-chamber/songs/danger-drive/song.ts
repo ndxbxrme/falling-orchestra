@@ -16,6 +16,6 @@ export const DANGER_DRIVE_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG11_CONFIG,
 };

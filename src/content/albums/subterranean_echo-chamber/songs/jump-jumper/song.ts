@@ -16,6 +16,6 @@ export const JUMP_JUMPER_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG7_CONFIG,
 };

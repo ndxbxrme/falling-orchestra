@@ -16,6 +16,6 @@ export const HOT_ROOM_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG4_CONFIG,
 };

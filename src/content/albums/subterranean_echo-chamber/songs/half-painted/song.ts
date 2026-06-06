@@ -16,6 +16,6 @@ export const HALF_PAINTED_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG14_CONFIG,
 };

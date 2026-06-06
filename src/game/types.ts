@@ -33,6 +33,11 @@ export type RootNoteName =
   | "A#"
   | "B";
 export type GameSessionPhase = "idle" | "countdown" | "playing" | "ending" | "completed";
+export type TransitionState =
+  | { kind: "none" }
+  | { kind: "grooveBuild"; targetLevel: number; progress: number; intensity: number }
+  | { kind: "grooveLanding"; level: number; progress: number; intensity: number }
+  | { kind: "songEnding"; progress: number; intensity: number };
 
 export interface ArenaBounds {
   left: number;
@@ -92,6 +97,7 @@ export interface PlayedNote {
 
 export interface OverlayState {
   sessionPhase: GameSessionPhase;
+  transitionState: TransitionState;
   activeObjects: number;
   fps: number;
   frameTimeMs: number;
@@ -106,11 +112,6 @@ export interface OverlayState {
   grooveTarget: number;
   grooveLevel: number;
   grooveLayerLabel: string;
-  grooveBoostIncoming: boolean;
-  grooveBoostTargetLevel: number | null;
-  grooveBoostIntensity: number;
-  endingIncoming: boolean;
-  endingIntensity: number;
   activeFormationCaught: number;
   activeFormationRequired: number;
   activeFormationVisible: boolean;

@@ -16,6 +16,6 @@ export const OVER_MY_SHOULDER_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG6_CONFIG,
 };

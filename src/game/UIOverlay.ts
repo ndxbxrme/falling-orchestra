@@ -65,23 +65,23 @@ export class UIOverlay {
   }
 
   update(state: OverlayState): void {
+    const transition = state.transitionState;
     this.objectCountValue.textContent = String(state.activeObjects);
     this.perfValue.textContent = `${state.fps.toFixed(0)} FPS / ${state.frameTimeMs.toFixed(1)}ms`;
     this.modeValue.textContent = `${state.rootNote} ${MODE_LABELS[state.mode]}`;
     this.densityValue.textContent = `${state.spawnPattern} / ${state.spawnLiveInterval.toFixed(2)}s`;
     this.grooveValue.textContent = `${state.grooveCharge} / ${state.grooveTarget}`;
     this.layerValue.textContent = state.grooveLayerLabel;
-    this.grooveBoostAlert.classList.toggle("incoming", state.grooveBoostIncoming || state.endingIncoming);
-    if (state.endingIncoming) {
-      this.grooveBoostText.textContent = this.glitchText("LAST TRANSISSION", state.endingIntensity);
-      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", state.endingIntensity.toFixed(3));
-    } else if (state.grooveBoostIncoming) {
-      const alertText =
-        state.grooveBoostTargetLevel === null
-          ? "GROOVE BOOST INCOMING"
-          : `GROOVE ${state.grooveBoostTargetLevel} INCOMING`;
-      this.grooveBoostText.textContent = this.glitchText(alertText, state.grooveBoostIntensity);
-      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", state.grooveBoostIntensity.toFixed(3));
+    this.grooveBoostAlert.classList.toggle("incoming", transition.kind !== "none");
+    if (transition.kind === "songEnding") {
+      this.grooveBoostText.textContent = this.glitchText("LAST TRANSISSION", transition.intensity * 0.72);
+      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", transition.intensity.toFixed(3));
+    } else if (transition.kind === "grooveLanding") {
+      this.grooveBoostText.textContent = this.glitchText(`GROOVE ${String(transition.level).padStart(2, "0")} LIVE`, transition.intensity * 0.26);
+      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", transition.intensity.toFixed(3));
+    } else if (transition.kind === "grooveBuild") {
+      this.grooveBoostText.textContent = this.glitchText(`GROOVE ${transition.targetLevel} INCOMING`, transition.intensity);
+      this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", transition.intensity.toFixed(3));
     } else {
       this.grooveBoostText.textContent = String(state.grooveLevel).padStart(2, "0");
       this.grooveBoostAlert.style.setProperty("--groove-boost-intensity", "0");

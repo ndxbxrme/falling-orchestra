@@ -16,6 +16,6 @@ export const WOODEN_SNARES_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG13_CONFIG,
 };

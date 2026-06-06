@@ -9,7 +9,7 @@ import { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { GAME_CONFIG, OBJECT_DEFINITIONS } from "./config";
-import type { ArenaBounds, MusicalObject, ObjectType, Surface, SurfaceKind } from "./types";
+import type { ArenaBounds, MusicalObject, ObjectType, Surface, SurfaceKind, TransitionState } from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -337,6 +337,7 @@ export class World {
   private backdropGrooveIntensity = 0;
   private endingProgress = 0;
   private endingIntensity = 0;
+  private transitionState: TransitionState = { kind: "none" };
   private backdropScrollDirection = new Vector2(0.78, -0.24);
   private backdropTargetScrollDirection = new Vector2(0.78, -0.24);
   private backdropScrollOffset = new Vector2(0, 0);
@@ -464,6 +465,9 @@ export class World {
     this.nextObjectId = 0;
     this.pulses.forEach((pulse) => pulse.mesh.dispose());
     this.pulses = [];
+    this.transitionState = { kind: "none" };
+    this.endingProgress = 0;
+    this.endingIntensity = 0;
   }
 
   setPlayerX(x: number): void {
@@ -488,6 +492,10 @@ export class World {
   setEndingState(progress: number, intensity: number): void {
     this.endingProgress = clamp(progress, 0, 1);
     this.endingIntensity = clamp(intensity, 0, 1);
+  }
+
+  setTransitionState(state: TransitionState): void {
+    this.transitionState = state;
   }
 
   setBackdropScrollDirection(direction: Vector2): void {
@@ -1001,6 +1009,8 @@ export class World {
 
   private syncBackdropArchitecture(): void {
     const groove = this.backdropGrooveIntensity;
+    const buildLift = this.transitionState.kind === "grooveBuild" ? this.transitionState.intensity * 0.22 : 0;
+    const landingLift = this.transitionState.kind === "grooveLanding" ? this.transitionState.intensity * 0.48 : 0;
     const powerDown = 1 - this.endingIntensity * 0.34;
     const level2 = clamp((groove - 0.18) / 0.24, 0, 1);
     const level3 = clamp((groove - 0.46) / 0.2, 0, 1);
@@ -1011,7 +1021,7 @@ export class World {
     const laserB = hex("#7de86f");
 
     this.backdropFrames.forEach((frame, index) => {
-      const visibilityRamp = clamp((0.22 + groove * 0.55 - index * 0.05) * powerDown, 0.12, 0.62);
+      const visibilityRamp = clamp((0.22 + groove * 0.55 - index * 0.05 + buildLift * 0.08 + landingLift * 0.12) * powerDown, 0.12, 0.72);
       frame.concrete.forEach((mesh) => {
         mesh.visibility = visibilityRamp;
       });
@@ -1019,7 +1029,7 @@ export class World {
       const lampColor = Color3.Lerp(amber, steel, level2);
       frame.lampMaterial.diffuseColor = lampColor;
       frame.lampMaterial.emissiveColor = lampColor.scale(
-        (0.34 + this.backdropBeatPulse * (0.32 + level3 * 0.24)) * powerDown,
+        (0.34 + this.backdropBeatPulse * (0.32 + level3 * 0.24) + buildLift * 0.24 + landingLift * 0.42) * powerDown,
       );
       frame.lampMaterial.alpha = (0.2 + level2 * 0.1 + this.backdropBeatPulse * 0.08) * powerDown;
 
@@ -1038,9 +1048,9 @@ export class World {
       laser.mesh.position.y = laser.baseY;
       laser.material.diffuseColor = index === 0 ? laserA : laserB;
       laser.material.emissiveColor = (index === 0 ? laserA : laserB).scale(
-        level3 * (0.3 + this.backdropBeatPulse * (0.7 + level4 * 0.8)) * powerDown,
+        level3 * (0.3 + this.backdropBeatPulse * (0.7 + level4 * 0.8) + buildLift * 0.4 + landingLift * 0.68) * powerDown,
       );
-      laser.material.alpha = (level3 * 0.3 + level4 * 0.28 + this.backdropBeatPulse * level4 * 0.18) * powerDown;
+      laser.material.alpha = (level3 * 0.3 + level4 * 0.28 + this.backdropBeatPulse * level4 * 0.18 + buildLift * 0.12 + landingLift * 0.24) * powerDown;
       laser.mesh.visibility = level3 * powerDown;
     });
 
@@ -1056,44 +1066,48 @@ export class World {
 
     const groove = this.backdropGrooveIntensity;
     const beat = this.backdropBeatPulse;
+    const buildLift = this.transitionState.kind === "grooveBuild" ? this.transitionState.intensity * 0.18 : 0;
+    const landingLift = this.transitionState.kind === "grooveLanding" ? this.transitionState.intensity * 0.54 : 0;
     const powerDown = 1 - this.endingIntensity * 0.36;
     const grooveLift = 0.22 + groove * 0.38;
 
     this.playfieldDecor.railMaterials.forEach((material, index) => {
       const accent = index % 7 === 0 ? 0.18 : 0.08;
       const baseAlpha = index % 7 === 1 ? 0.78 : index % 7 === 0 ? 0.48 : 0.34;
-      material.alpha = clamp((baseAlpha + groove * 0.12 + beat * accent) * powerDown, 0.1, 0.92);
-      material.emissiveColor = material.diffuseColor.scale((0.42 + grooveLift + beat * (accent + 0.06)) * powerDown);
+      material.alpha = clamp((baseAlpha + groove * 0.12 + beat * accent + buildLift * 0.08 + landingLift * 0.18) * powerDown, 0.1, 0.96);
+      material.emissiveColor = material.diffuseColor.scale((0.42 + grooveLift + beat * (accent + 0.06) + buildLift * 0.24 + landingLift * 0.52) * powerDown);
     });
 
-    this.playfieldDecor.centerlineMaterial.alpha = (0.24 + groove * 0.14 + beat * 0.1) * powerDown;
+    this.playfieldDecor.centerlineMaterial.alpha = (0.24 + groove * 0.14 + beat * 0.1 + buildLift * 0.08 + landingLift * 0.22) * powerDown;
     this.playfieldDecor.centerlineMaterial.emissiveColor = this.playfieldDecor.centerlineMaterial.diffuseColor.scale(
-      (0.34 + groove * 0.58 + beat * 0.36) * powerDown,
+      (0.34 + groove * 0.58 + beat * 0.36 + buildLift * 0.32 + landingLift * 0.62) * powerDown,
     );
 
     this.playfieldDecor.centerTickMaterials.forEach((material, index) => {
       const pulse = index === 4 ? 0.26 : 0.1;
       material.alpha = (index === 4 ? 0.52 : 0.34) * powerDown;
-      material.emissiveColor = material.diffuseColor.scale((0.32 + groove * 0.28 + beat * (pulse + 0.06)) * powerDown);
+      material.emissiveColor = material.diffuseColor.scale((0.32 + groove * 0.28 + beat * (pulse + 0.06) + landingLift * 0.4) * powerDown);
     });
 
     this.playfieldDecor.radialMaterials.forEach((material, index) => {
       material.alpha = clamp((0.2 + groove * 0.08 - index * 0.025 + beat * 0.04) * powerDown, 0.05, 0.34);
-      material.emissiveColor = material.diffuseColor.scale((0.22 + groove * 0.28 + beat * 0.08) * powerDown);
+      material.emissiveColor = material.diffuseColor.scale((0.22 + groove * 0.28 + beat * 0.08 + buildLift * 0.18 + landingLift * 0.28) * powerDown);
     });
 
     this.playfieldDecor.lowerGuideMaterials.forEach((material, index) => {
       material.alpha = clamp((0.18 + groove * 0.07 - index * 0.018 + beat * 0.03) * powerDown, 0.04, 0.28);
-      material.emissiveColor = material.diffuseColor.scale((0.18 + groove * 0.22 + beat * 0.06) * powerDown);
+      material.emissiveColor = material.diffuseColor.scale((0.18 + groove * 0.22 + beat * 0.06 + buildLift * 0.16 + landingLift * 0.26) * powerDown);
     });
   }
 
   private syncCameraMotion(): void {
     const groove = this.backdropGrooveIntensity;
+    const buildLift = this.transitionState.kind === "grooveBuild" ? this.transitionState.intensity : 0;
+    const landingLift = this.transitionState.kind === "grooveLanding" ? this.transitionState.intensity : 0;
     const settle = 1 - this.endingProgress * 0.52;
-    const drift = (0.16 + groove * 0.28) * settle;
-    const verticalDrift = (0.08 + groove * 0.16) * settle;
-    const beatLift = this.backdropBeatPulse * (0.08 + groove * 0.14) * (1 - this.endingProgress * 0.35);
+    const drift = (0.16 + groove * 0.28 + buildLift * 0.04 + landingLift * 0.07) * settle;
+    const verticalDrift = (0.08 + groove * 0.16 + buildLift * 0.03 + landingLift * 0.05) * settle;
+    const beatLift = this.backdropBeatPulse * (0.08 + groove * 0.14 + landingLift * 0.06) * (1 - this.endingProgress * 0.35);
     this.camera.position.x =
       this.cameraBasePosition.x +
       Math.sin(this.backdropTime * 0.22) * drift +
@@ -1102,8 +1116,11 @@ export class World {
       this.cameraBasePosition.y +
       Math.sin(this.backdropTime * 0.31 + 1.3) * verticalDrift +
       Math.cos(this.backdropTime * 0.18 + 0.4) * verticalDrift * 0.35 +
+      Math.sin(this.backdropTime * 5.4) * landingLift * 0.05 +
       beatLift;
-    this.camera.rotation.z = Math.sin(this.backdropTime * 0.18) * (0.006 + groove * 0.012) * settle;
+    this.camera.rotation.z =
+      Math.sin(this.backdropTime * 0.18) * (0.006 + groove * 0.012) * settle +
+      Math.sin(this.backdropTime * 6.8) * landingLift * 0.012;
   }
 
   private createPlayerAvatar(): Mesh {

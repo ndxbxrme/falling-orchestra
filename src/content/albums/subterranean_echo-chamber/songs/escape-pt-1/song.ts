@@ -16,6 +16,6 @@ export const ESCAPE_PT_1_SONG: SongManifest = {
     "driving"
 ],
   recommendedWeight: 0.7,
-  availability: "hidden",
+  availability: "included",
   config: SONG12_CONFIG,
 };

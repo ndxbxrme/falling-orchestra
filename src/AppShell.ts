@@ -32,6 +32,13 @@ interface PlayingSession {
   queueIndex?: number;
 }
 
+interface TrackTransitionOverlay {
+  kicker: string;
+  title: string;
+  subtitle: string;
+  accent: string;
+}
+
 export class AppShell {
   private gameShell: HTMLDivElement;
   private canvas: HTMLCanvasElement;
@@ -42,6 +49,7 @@ export class AppShell {
   private libraryState: LibraryState = createDefaultLibraryState();
   private session: PlayingSession | null = null;
   private pendingAdvanceTimeout?: number;
+  private trackTransitionOverlay: TrackTransitionOverlay | null = null;
 
   constructor(private root: HTMLDivElement) {
     this.root.innerHTML = `
@@ -219,11 +227,20 @@ export class AppShell {
                     <button type="button" class="library-chip" data-action="play-album" data-album-id="${featuredAlbum.id}">Play Album</button>
                     <button type="button" class="library-chip" data-action="open-album" data-album-id="${featuredAlbum.id}">Open Album</button>
                   </div>
+                  <div class="recommended-cover recommended-cover-inline">
+                    ${
+                      featuredAlbum.coverArt
+                        ? `<img src="${featuredAlbum.coverArt}" alt="${escapeHtml(featuredAlbum.title)} cover art" />`
+                        : `<span>${escapeHtml(featuredAlbum.title.slice(0, 2).toUpperCase())}</span>`
+                    }
+                  </div>
                 </div>
-                <div class="recommended-support">
-                  ${supportingSongs
-                    .map((song) => this.renderCompactSongCard(song))
-                    .join("")}
+                <div class="recommended-side">
+                  <div class="recommended-support">
+                    ${supportingSongs
+                      .map((song) => this.renderCompactSongCard(song))
+                      .join("")}
+                  </div>
                 </div>
               </section>
             `
@@ -346,15 +363,20 @@ export class AppShell {
 
     return `
       <article class="compact-song-card">
-        <button type="button" class="card-favorite${favorite ? " active" : ""}" data-action="toggle-favorite" data-song-id="${song.id}">
-          ${favorite ? "★" : "☆"}
-        </button>
-        <span class="compact-track-no">${String(song.trackNumber).padStart(2, "0")}</span>
-        <h3>${escapeHtml(song.title)}</h3>
-        <p>${escapeHtml(album?.title ?? "")}</p>
-        <div class="compact-meta">
-          <span>${song.energy ?? 3}/5 energy</span>
-          ${emphasizeFavorite ? "<span>saved</span>" : ""}
+        <div class="compact-song-top">
+          ${album ? this.renderSongArt(album, "compact-song-art") : ""}
+          <button type="button" class="card-favorite${favorite ? " active" : ""}" data-action="toggle-favorite" data-song-id="${song.id}">
+            ${favorite ? "★" : "☆"}
+          </button>
+        </div>
+        <div class="compact-song-copy">
+          <span class="compact-track-no">${String(song.trackNumber).padStart(2, "0")}</span>
+          <h3>${escapeHtml(song.title)}</h3>
+          <p>${escapeHtml(album?.title ?? "")}</p>
+          <div class="compact-meta">
+            <span>${song.energy ?? 3}/5 energy</span>
+            ${emphasizeFavorite ? "<span>saved</span>" : ""}
+          </div>
         </div>
         <button type="button" class="play-link" data-action="play-song" data-song-id="${song.id}">Play</button>
       </article>
@@ -385,11 +407,13 @@ export class AppShell {
   }
 
   private renderSongRow(song: SongEntry): string {
+    const album = getAlbumById(song.albumId);
     const favorite = this.libraryState.favoritesSongIds.includes(song.id);
 
     return `
       <article class="song-row">
         <div class="song-row-meta">
+          ${album ? this.renderSongArt(album, "song-row-art") : ""}
           <span class="song-row-index">${String(song.trackNumber).padStart(2, "0")}</span>
           <div>
             <h3>${escapeHtml(song.title)}</h3>
@@ -432,9 +456,23 @@ export class AppShell {
           song && album
             ? `
               <div class="session-now-playing">
-                <span class="section-label">Now Playing</span>
-                <h2>${escapeHtml(song.title)}</h2>
-                <p>${escapeHtml(album.title)}${queueLabel ? ` · ${queueLabel}` : ""}</p>
+                ${this.renderSongArt(album, "session-song-art")}
+                <div class="session-now-playing-copy">
+                  <span class="section-label">Now Playing</span>
+                  <h2>${escapeHtml(song.title)}</h2>
+                  <p>${escapeHtml(album.title)}${queueLabel ? ` · ${queueLabel}` : ""}</p>
+                </div>
+              </div>
+            `
+            : ""
+        }
+        ${
+          this.trackTransitionOverlay
+            ? `
+              <div class="track-transition-overlay" style="--transition-accent:${this.trackTransitionOverlay.accent};">
+                <span class="section-label">${escapeHtml(this.trackTransitionOverlay.kicker)}</span>
+                <h2>${escapeHtml(this.trackTransitionOverlay.title)}</h2>
+                <p>${escapeHtml(this.trackTransitionOverlay.subtitle)}</p>
               </div>
             `
             : ""
@@ -462,6 +500,7 @@ export class AppShell {
     this.disposeGame();
     this.libraryState = registerRecentPlayback(this.libraryState, song.id, song.albumId);
     saveLibraryState(this.libraryState);
+    this.trackTransitionOverlay = null;
     this.session = { songId, albumQueue, queueIndex };
     this.renderSessionChrome();
 
@@ -486,6 +525,15 @@ export class AppShell {
 
     const nextIndex = this.session.queueIndex + 1;
     if (nextIndex >= this.session.albumQueue.length) {
+      const currentSong = getSongById(this.session.songId);
+      const currentAlbum = currentSong ? getAlbumById(currentSong.albumId) : undefined;
+      this.trackTransitionOverlay = {
+        kicker: "Album Complete",
+        title: currentAlbum?.title ?? "Set Complete",
+        subtitle: "Returning to library",
+        accent: currentAlbum?.theme.accent ?? "#7ee9ef",
+      };
+      this.renderSessionChrome();
       this.clearPendingAdvance();
       this.pendingAdvanceTimeout = window.setTimeout(() => {
         this.stopPlayback();
@@ -493,15 +541,26 @@ export class AppShell {
       return;
     }
 
+    const nextSongId = this.session.albumQueue[nextIndex];
+    const nextSong = getSongById(nextSongId);
+    const nextAlbum = nextSong ? getAlbumById(nextSong.albumId) : undefined;
+    this.trackTransitionOverlay = {
+      kicker: "Next Transmission",
+      title: nextSong?.title ?? "Loading",
+      subtitle: nextAlbum?.title ?? "",
+      accent: nextAlbum?.theme.accent ?? "#7ee9ef",
+    };
+    this.renderSessionChrome();
     this.clearPendingAdvance();
-      this.pendingAdvanceTimeout = window.setTimeout(() => {
-      void this.startSong(this.session!.albumQueue![nextIndex], this.session!.albumQueue, nextIndex);
+    this.pendingAdvanceTimeout = window.setTimeout(() => {
+      void this.startSong(nextSongId, this.session!.albumQueue, nextIndex);
     }, 1400);
   }
 
   private stopPlayback(): void {
     this.clearPendingAdvance();
     this.disposeGame();
+    this.trackTransitionOverlay = null;
     this.session = null;
     this.render();
   }
@@ -518,5 +577,18 @@ export class AppShell {
       window.clearTimeout(this.pendingAdvanceTimeout);
       this.pendingAdvanceTimeout = undefined;
     }
+  }
+
+  private renderSongArt(album: Album, className: string): string {
+    const initials = escapeHtml(album.title.slice(0, 2).toUpperCase());
+    return `
+      <div class="${className}" style="--art-accent:${album.theme.accent};">
+        ${
+          album.coverArt
+            ? `<img src="${album.coverArt}" alt="${escapeHtml(album.title)} cover art" />`
+            : `<span>${initials}</span>`
+        }
+      </div>
+    `;
   }
 }
