@@ -7,6 +7,7 @@ import type {
   ImpactSampleLayerConfig,
   ImpactVoiceConfig,
   LoopClipConfig,
+  SoloVoiceConfig,
   SongConfig,
 } from "./songConfig";
 import type { InstrumentFamily, PlayedNote, RootNoteName, ScaleModeName } from "./types";
@@ -26,6 +27,7 @@ const TRANSPORT_LOOKAHEAD = 0.16;
 const LOOP_DEBUG =
   typeof window !== "undefined" &&
   (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const SOLO_DEBUG = LOOP_DEBUG;
 const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
   voices: {
     bell: {
@@ -192,6 +194,18 @@ export class MusicSystem {
   private impactSampleFetchPromise?: Promise<void>;
   private impactSampleBuffers = new Map<string, AudioBuffer>();
   private impactSampleLoadPromise?: Promise<void>;
+  private soloVoice?: {
+    motionGain: GainNode;
+    articulationGain: GainNode;
+    filter: BiquadFilterNode;
+    panner: StereoPannerNode;
+    oscA: OscillatorNode;
+    oscB: OscillatorNode;
+    baseGain: number;
+  };
+  private soloVoiceConfig: SoloVoiceConfig = {};
+  private lastSoloMidi?: number;
+  private soloStepDirection: 1 | -1 = 1;
   private desiredGrooveLevel = 1;
   private queuedTransitionLevel: number | null = null;
   private transitionNoticeLevel: number | null = null;
@@ -215,6 +229,7 @@ export class MusicSystem {
   loadSong(song: SongConfig): void {
     this.song = song;
     this.impactPalette = song.impactPalette ?? DEFAULT_IMPACT_PALETTE;
+    this.soloVoiceConfig = song.soloVoice ?? {};
     this.bpm = song.transport.bpm;
     this.beatsPerBar = song.transport.beatsPerBar;
     this.harmonyCycleBars = song.transport.harmonyCycleBars;
@@ -245,6 +260,8 @@ export class MusicSystem {
     this.endingCompletesAt = undefined;
     this.songCompleted = false;
     this.songEndingScheduled = false;
+    this.lastSoloMidi = undefined;
+    this.soloStepDirection = 1;
     this.nextGrooveBoundaryTime = undefined;
     if (this.harmonyTimeline.length > 0) {
       this.rootNote = this.harmonyTimeline[0].rootNote;
@@ -354,6 +371,9 @@ export class MusicSystem {
     this.endingCompletesAt = undefined;
     this.songCompleted = false;
     this.songEndingScheduled = false;
+    this.lastSoloMidi = undefined;
+    this.soloStepDirection = 1;
+    this.stopSoloVoice();
     this.resetImpactMixLevel();
     this.primeTransport(nextStartTime);
     this.scheduleStartupGroove(nextStartTime);
@@ -450,7 +470,73 @@ export class MusicSystem {
     });
   }
 
+  triggerSoloNote(options: {
+    noteRange: [number, number];
+    normalizedX: number;
+    impact: number;
+  }): PlayedNote {
+    const when = (this.audioContext?.currentTime ?? 0) + 0.008;
+    const harmony =
+      this.harmonyControlMode === "cycle"
+        ? this.getHarmonyForTime(when)
+        : { rootNote: this.rootNote, mode: this.mode };
+    const baseMidi =
+      options.noteRange[0] +
+      options.normalizedX * (options.noteRange[1] - options.noteRange[0]) +
+      clamp(options.impact, 0, 18) * 0.12;
+    let quantized = this.quantizer.quantizeMidi(
+      ROOT_NOTES[harmony.rootNote],
+      SCALE_MODES[harmony.mode],
+      baseMidi,
+    );
+    quantized = this.resolveSoloMidi(
+      quantized,
+      ROOT_NOTES[harmony.rootNote],
+      SCALE_MODES[harmony.mode],
+      options.noteRange,
+      options.normalizedX,
+    );
+    if (SOLO_DEBUG) {
+      console.debug("[SoloDebug] triggerSoloNote", {
+        baseMidi,
+        quantized,
+        lastSoloMidi: this.lastSoloMidi,
+        normalizedX: options.normalizedX,
+        rootNote: harmony.rootNote,
+        mode: harmony.mode,
+      });
+    }
+    this.lastSoloMidi = quantized;
+
+    this.playSoloVoice(quantized, options.normalizedX, when);
+    return {
+      label: midiToLabel(quantized),
+      color: "#ffd6ad",
+    };
+  }
+
+  stopSoloVoice(): void {
+    if (!this.audioContext || !this.soloVoice) {
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    const { motionGain, articulationGain, oscA, oscB } = this.soloVoice;
+    motionGain.gain.cancelScheduledValues(now);
+    articulationGain.gain.cancelScheduledValues(now);
+    motionGain.gain.setValueAtTime(Math.max(motionGain.gain.value, 0.0001), now);
+    articulationGain.gain.setValueAtTime(Math.max(articulationGain.gain.value, 0.0001), now);
+    motionGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+    articulationGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+    oscA.stop(now + 0.42);
+    oscB.stop(now + 0.42);
+    this.soloVoice = undefined;
+    this.lastSoloMidi = undefined;
+    this.soloStepDirection = 1;
+  }
+
   dispose(): void {
+    this.stopSoloVoice();
     void this.audioContext?.close();
   }
 
@@ -541,6 +627,7 @@ export class MusicSystem {
       this.clearTransitionNotice();
     }
     this.updateImpactFxState(now);
+    this.updateSoloVoiceMotion(now);
     const startTime = this.transportStartTime;
     if (this.harmonyControlMode === "cycle") {
       this.syncDisplayedHarmony(now);
@@ -1401,6 +1488,206 @@ export class MusicSystem {
       filterLfoDepthA: profile.filterLfoDepthA ?? fallback.filterLfoDepthA ?? 0.72,
       filterLfoDepthB: profile.filterLfoDepthB ?? fallback.filterLfoDepthB ?? 0.48,
     };
+  }
+
+  private playSoloVoice(midi: number, normalizedX: number, when: number): void {
+    if (!this.audioContext) {
+      return;
+    }
+
+    const frequency = midiToFrequency(midi);
+    const pan = clamp(normalizedX * 1.2 - 0.6, -0.6, 0.6);
+    const baseGain = this.soloVoiceConfig.baseGain ?? 0.12;
+    const glideTime = this.soloVoiceConfig.glideTime ?? 0.11;
+    const barDuration = (60 / this.bpm) * this.beatsPerBar;
+    const decayDuration = 2;//Math.max(2.6, Math.min(2.2, barDuration * 1.0));
+    const sustainHoldDuration = Math.max(0.6, Math.min(2.4, barDuration * 0.58));
+    const releaseDuration = Math.max(1.2, Math.min(4.2, barDuration * 0.95));
+    const sustainLevel = 0.48;
+    const releaseStartTime = when + decayDuration + sustainHoldDuration;
+    const releaseEndTime = releaseStartTime + releaseDuration;
+
+    if (!this.soloVoice) {
+      const ctx = this.audioContext;
+      const oscA = ctx.createOscillator();
+      const oscB = ctx.createOscillator();
+      const mix = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+      const motionGain = ctx.createGain();
+      const articulationGain = ctx.createGain();
+      const panner = ctx.createStereoPanner();
+
+      oscA.type = "triangle";
+      oscB.type = "sawtooth";
+      oscA.frequency.setValueAtTime(frequency, when);
+      oscB.frequency.setValueAtTime(frequency * 1.002, when);
+
+      mix.gain.value = 0.7;
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(880, when);
+      filter.Q.setValueAtTime(5.2, when);
+      motionGain.gain.setValueAtTime(0.0001, when);
+      motionGain.gain.linearRampToValueAtTime(baseGain * 1.28, when + 0.03);
+      articulationGain.gain.setValueAtTime(0.0001, when);
+      articulationGain.gain.linearRampToValueAtTime(1.62, when + 0.016);
+      articulationGain.gain.linearRampToValueAtTime(sustainLevel, when + decayDuration);
+      articulationGain.gain.setValueAtTime(sustainLevel, releaseStartTime);
+      articulationGain.gain.exponentialRampToValueAtTime(0.0001, releaseEndTime);
+      panner.pan.setValueAtTime(pan, when);
+
+      oscA.connect(mix);
+      oscB.connect(mix);
+      mix.connect(filter);
+      filter.connect(motionGain);
+      motionGain.connect(articulationGain);
+      articulationGain.connect(panner);
+      this.connectBusSend(panner, this.dryBusGain, 0.7, when);
+      this.connectBusSend(panner, this.driveBusInput, 0.24, when);
+      this.connectBusSend(panner, this.delayBusInput, 0.1, when);
+      this.connectBusSend(panner, this.reverbBusInput, 0.08, when);
+
+      oscA.start(when);
+      oscB.start(when);
+
+      this.soloVoice = {
+        motionGain,
+        articulationGain,
+        filter,
+        panner,
+        oscA,
+        oscB,
+        baseGain,
+      };
+      return;
+    }
+
+    this.soloVoice.baseGain = baseGain;
+    this.soloVoice.oscA.frequency.setTargetAtTime(frequency, when, glideTime);
+    this.soloVoice.oscB.frequency.setTargetAtTime(frequency * 1.002, when, glideTime);
+    this.soloVoice.panner.pan.setTargetAtTime(pan, when, 0.08);
+    this.soloVoice.motionGain.gain.cancelScheduledValues(when);
+    this.soloVoice.motionGain.gain.setValueAtTime(
+      Math.max(this.soloVoice.motionGain.gain.value, 0.0001),
+      when,
+    );
+    this.soloVoice.motionGain.gain.linearRampToValueAtTime(baseGain * 1.34, when + 0.03);
+    this.soloVoice.articulationGain.gain.cancelScheduledValues(when);
+    this.soloVoice.articulationGain.gain.setValueAtTime(
+      Math.max(this.soloVoice.articulationGain.gain.value, 0.0001),
+      when,
+    );
+    this.soloVoice.articulationGain.gain.linearRampToValueAtTime(1.72, when + 0.016);
+    this.soloVoice.articulationGain.gain.linearRampToValueAtTime(sustainLevel, when + decayDuration);
+    this.soloVoice.articulationGain.gain.setValueAtTime(sustainLevel, releaseStartTime);
+    this.soloVoice.articulationGain.gain.exponentialRampToValueAtTime(0.0001, releaseEndTime);
+  }
+
+  private updateSoloVoiceMotion(now: number): void {
+    if (!this.soloVoice) {
+      return;
+    }
+
+    const groove = this.getGrooveFxIntensity();
+    const sweepA = Math.sin(now * Math.PI * 2 * 0.021);
+    const sweepB = Math.sin(now * Math.PI * 2 * 0.008 + 1.2);
+    const cutoff =
+      860 +
+      groove * 980 +
+      (sweepA * 0.68 + sweepB * 0.42) * 520;
+    const pulse = this.getSoloPulseAtTime(now);
+    this.soloVoice.filter.frequency.setTargetAtTime(
+      clamp(cutoff + pulse * 260, 320, 4600),
+      now,
+      0.1,
+    );
+    this.soloVoice.filter.Q.setTargetAtTime(4.8 + groove * 1.4 + Math.max(0, sweepA) * 0.7, now, 0.22);
+    this.soloVoice.motionGain.gain.setTargetAtTime(
+      this.soloVoice.baseGain * (1.34 + groove * 0.1 + pulse * 0.1),
+      now,
+      0.03,
+    );
+  }
+
+  private getSoloPulseAtTime(time: number): number {
+    const pattern = this.soloVoiceConfig.pulsePattern?.length
+      ? this.soloVoiceConfig.pulsePattern
+      : [1, 0.92, 0.96, 0.9];
+    const division = this.soloVoiceConfig.pulseDivision ?? "quarter";
+    const stepDuration =
+      division === "sixteenth"
+        ? 60 / this.bpm / SIXTEENTH_NOTES_PER_BEAT
+        : division === "eighth"
+          ? 60 / this.bpm / 2
+          : 60 / this.bpm;
+    const startTime = this.transportStartTime ?? time;
+    const elapsed = Math.max(0, time - startTime);
+    const stepIndex = Math.floor(elapsed / stepDuration);
+    const phase = (elapsed % stepDuration) / Math.max(stepDuration, 0.0001);
+    const stepStrength = clamp(pattern[stepIndex % pattern.length] ?? 0, 0, 1.4);
+    const hit = Math.exp(-phase * 5.2);
+    return clamp(stepStrength * (0.74 + hit * 0.26), 0, 1.6);
+  }
+
+  private resolveSoloMidi(
+    quantized: number,
+    root: number,
+    scaleIntervals: number[],
+    noteRange: [number, number],
+    normalizedX: number,
+  ): number {
+    if (this.lastSoloMidi === undefined || quantized !== this.lastSoloMidi) {
+      if (normalizedX > 0.66) {
+        this.soloStepDirection = 1;
+      } else if (normalizedX < 0.34) {
+        this.soloStepDirection = -1;
+      }
+      return quantized;
+    }
+
+    const candidates = this.getScaleCandidatesInRange(root, scaleIntervals, noteRange);
+    if (candidates.length <= 1) {
+      return quantized;
+    }
+
+    if (normalizedX > 0.66) {
+      this.soloStepDirection = 1;
+    } else if (normalizedX < 0.34) {
+      this.soloStepDirection = -1;
+    }
+
+    const lastIndex = candidates.indexOf(this.lastSoloMidi);
+    if (lastIndex >= 0) {
+      const stepCandidate = candidates[lastIndex + this.soloStepDirection];
+      if (stepCandidate !== undefined) {
+        return stepCandidate;
+      }
+
+      this.soloStepDirection = this.soloStepDirection === 1 ? -1 : 1;
+      const fallbackStep = candidates[lastIndex + this.soloStepDirection];
+      if (fallbackStep !== undefined) {
+        return fallbackStep;
+      }
+    }
+
+    return candidates.find((midi) => midi !== this.lastSoloMidi) ?? quantized;
+  }
+
+  private getScaleCandidatesInRange(
+    root: number,
+    scaleIntervals: number[],
+    noteRange: [number, number],
+  ): number[] {
+    const candidates: number[] = [];
+    for (let midi = noteRange[0] - 12; midi <= noteRange[1] + 12; midi += 1) {
+      const quantized = this.quantizer.quantizeMidi(root, scaleIntervals, midi);
+      if (quantized < noteRange[0] || quantized > noteRange[1]) {
+        continue;
+      }
+      if (!candidates.includes(quantized)) {
+        candidates.push(quantized);
+      }
+    }
+    return candidates.sort((a, b) => a - b);
   }
 
   private routeImpactVoice(

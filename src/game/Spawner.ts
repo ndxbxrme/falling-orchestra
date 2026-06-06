@@ -56,8 +56,17 @@ export class Spawner {
   private nextSpecialId = 0;
   private megaQueued = false;
   private endingTaperProgress: number | null = null;
+  private soloModeActive = false;
+  private soloTriggerCooldown: number = GAME_CONFIG.soloTriggerCooldownMin;
+  private soloModeNextSpawnIn = 0;
 
-  update(deltaTime: number, bounds: ArenaBounds, activeObjects: number): SpawnRequest[] {
+  update(
+    deltaTime: number,
+    bounds: ArenaBounds,
+    activeObjects: number,
+    activeSoloObjects: number,
+    specialModeActive: boolean,
+  ): SpawnRequest[] {
     this.time += deltaTime;
 
     if (this.frozen || activeObjects >= GAME_CONFIG.maxObjects) {
@@ -112,6 +121,8 @@ export class Spawner {
       requests.push(this.buildMegaRequest(bounds));
     }
 
+    this.updateSoloSpawns(deltaTime, bounds, activeObjects + requests.length, activeSoloObjects, specialModeActive, requests);
+
     return requests;
   }
 
@@ -126,6 +137,9 @@ export class Spawner {
     this.nextSpecialId = 0;
     this.megaQueued = false;
     this.endingTaperProgress = null;
+    this.soloModeActive = false;
+    this.soloTriggerCooldown = this.randomSoloTriggerCooldown();
+    this.soloModeNextSpawnIn = 0;
   }
 
   setSpawnProfile(profile?: SpawnProfileConfig): void {
@@ -161,7 +175,19 @@ export class Spawner {
       this.specialBurst = null;
       this.megaQueued = false;
       this.nextSpawnIn = Math.min(this.nextSpawnIn, this.getEffectiveInterval());
+      this.soloModeNextSpawnIn = 0;
     }
+  }
+
+  setSoloModeActive(active: boolean): void {
+    this.soloModeActive = active;
+    if (active) {
+      this.soloModeNextSpawnIn = 0.45;
+      return;
+    }
+
+    this.soloModeNextSpawnIn = 0;
+    this.soloTriggerCooldown = this.randomSoloTriggerCooldown();
   }
 
   private randomizedWindowInterval(): number {
@@ -261,6 +287,70 @@ export class Spawner {
 
   queueMegaSpawn(): void {
     this.megaQueued = true;
+  }
+
+  private updateSoloSpawns(
+    deltaTime: number,
+    bounds: ArenaBounds,
+    projectedActiveObjects: number,
+    activeSoloObjects: number,
+    specialModeActive: boolean,
+    requests: SpawnRequest[],
+  ): void {
+    if (this.endingTaperProgress !== null || projectedActiveObjects >= GAME_CONFIG.maxObjects) {
+      return;
+    }
+
+    if (this.soloModeActive) {
+      if (activeSoloObjects > 0 || this.specialBurst) {
+        return;
+      }
+
+      this.soloModeNextSpawnIn -= deltaTime;
+      if (this.soloModeNextSpawnIn > 0) {
+        return;
+      }
+
+      requests.push(this.buildSoloRequest(bounds));
+      this.soloModeNextSpawnIn = this.randomSoloModeInterval();
+      return;
+    }
+
+    if (specialModeActive || activeSoloObjects > 0 || this.specialBurst) {
+      return;
+    }
+
+    this.soloTriggerCooldown -= deltaTime;
+    if (this.soloTriggerCooldown > 0) {
+      return;
+    }
+
+    const triggerChance = deltaTime * 0.12;
+    if (Math.random() >= triggerChance) {
+      return;
+    }
+
+    requests.push(this.buildSoloRequest(bounds));
+    this.soloTriggerCooldown = this.randomSoloTriggerCooldown();
+  }
+
+  private buildSoloRequest(bounds: ArenaBounds): SpawnRequest {
+    return {
+      type: "solo",
+      x: this.pickX(bounds),
+      velocityX: (Math.random() - 0.5) * 1.6,
+      velocityY: -1.05 - Math.random() * 0.45,
+    };
+  }
+
+  private randomSoloTriggerCooldown(): number {
+    return GAME_CONFIG.soloTriggerCooldownMin +
+      Math.random() * (GAME_CONFIG.soloTriggerCooldownMax - GAME_CONFIG.soloTriggerCooldownMin);
+  }
+
+  private randomSoloModeInterval(): number {
+    return GAME_CONFIG.soloModeSpawnIntervalMin +
+      Math.random() * (GAME_CONFIG.soloModeSpawnIntervalMax - GAME_CONFIG.soloModeSpawnIntervalMin);
   }
 
   private buildSpecialRequest(burst: SpecialBurst, bounds: ArenaBounds): SpawnRequest {

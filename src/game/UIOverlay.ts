@@ -1,4 +1,4 @@
-import { MODE_LABELS, SPAWN_PATTERN_LABELS } from "./config";
+import { GAME_CONFIG, MODE_LABELS, SPAWN_PATTERN_LABELS } from "./config";
 import type { OverlayState, RootNoteName, ScaleModeName, SpawnPattern } from "./types";
 
 interface OverlayCallbacks {
@@ -40,6 +40,9 @@ export class UIOverlay {
   private formationSection!: HTMLDivElement;
   private formationValue!: HTMLElement;
   private formationFill!: HTMLDivElement;
+  private soloSection!: HTMLDivElement;
+  private soloValue!: HTMLElement;
+  private soloFill!: HTMLDivElement;
   private rootSelect!: HTMLSelectElement;
   private modeSelect!: HTMLSelectElement;
   private spawnSlider!: HTMLInputElement;
@@ -91,6 +94,9 @@ export class UIOverlay {
     this.formationFill.style.width = state.activeFormationVisible
       ? `${(state.activeFormationCaught / Math.max(1, state.activeFormationRequired)) * 100}%`
       : "0%";
+    this.soloSection.classList.toggle("hidden", !state.soloModeActive);
+    this.soloValue.textContent = `${state.soloMissesRemaining} misses left`;
+    this.soloFill.style.width = `${(state.soloMissesRemaining / GAME_CONFIG.soloMaxConsecutiveMisses) * 100}%`;
 
     if (this.rootSelect.value !== state.rootNote) {
       this.rootSelect.value = state.rootNote;
@@ -136,7 +142,7 @@ export class UIOverlay {
     x: number,
     y: number,
     color: string,
-    variant: "note" | "banner" = "note",
+    variant: "note" | "banner" | "callout" = "note",
   ): void {
     if (variant === "banner") {
       this.enqueueBanner(text, color);
@@ -144,7 +150,7 @@ export class UIOverlay {
     }
 
     const label = document.createElement("div");
-    label.className = "note-label";
+    label.className = variant === "callout" ? "note-label callout" : "note-label";
     label.textContent = text;
     label.style.color = color;
     label.style.left = `${x}px`;
@@ -190,6 +196,16 @@ export class UIOverlay {
           </div>
           <div class="formation-bar">
             <div class="formation-fill" data-formation-fill></div>
+          </div>
+        </div>
+
+        <div class="formation-strip floating solo-strip hidden" data-solo-section>
+          <div class="formation-copy">
+            <strong>Solo Line</strong>
+            <span data-solo-value>2 misses left</span>
+          </div>
+          <div class="formation-bar">
+            <div class="formation-fill solo-fill" data-solo-fill></div>
           </div>
         </div>
 
@@ -337,6 +353,9 @@ export class UIOverlay {
     this.formationSection = this.query<HTMLDivElement>("[data-formation-section]");
     this.formationValue = this.query("[data-formation-value]");
     this.formationFill = this.query<HTMLDivElement>("[data-formation-fill]");
+    this.soloSection = this.query<HTMLDivElement>("[data-solo-section]");
+    this.soloValue = this.query("[data-solo-value]");
+    this.soloFill = this.query<HTMLDivElement>("[data-solo-fill]");
     this.rootSelect = this.query<HTMLSelectElement>("[data-root-select]");
     this.modeSelect = this.query<HTMLSelectElement>("[data-mode-select]");
     this.spawnSlider = this.query<HTMLInputElement>("[data-spawn-slider]");

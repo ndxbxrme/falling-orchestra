@@ -1,7 +1,7 @@
 import type { Vector2 } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 
-export type ObjectType = "bell" | "bass" | "spark" | "snare" | "mega";
+export type ObjectType = "bell" | "bass" | "spark" | "snare" | "mega" | "solo";
 export type InstrumentFamily = "bell" | "bass" | "spark" | "snare" | "mega";
 export type SurfaceKind = "floor" | "wall" | "slope" | "player";
 export type SpawnPattern = "rain" | "lanes" | "swing";
@@ -53,6 +53,7 @@ export interface MusicalObject {
   noteFamily: InstrumentFamily;
   specialFormationId?: string;
   specialCaught?: boolean;
+  soloCaught?: boolean;
   position: Vector2;
   velocity: Vector2;
   radius: number;
@@ -115,6 +116,8 @@ export interface OverlayState {
   activeFormationCaught: number;
   activeFormationRequired: number;
   activeFormationVisible: boolean;
+  soloModeActive: boolean;
+  soloMissesRemaining: number;
   paused: boolean;
   muted: boolean;
   freezeSpawning: boolean;

@@ -106,6 +106,13 @@ export interface ImpactPaletteConfig {
   megaFxMacro: MegaFxMacroConfig;
 }
 
+export interface SoloVoiceConfig {
+  baseGain?: number;
+  glideTime?: number;
+  pulseDivision?: "quarter" | "eighth" | "sixteenth";
+  pulsePattern?: number[];
+}
+
 export interface SongConfig {
   id: string;
   transport: {
@@ -117,4 +124,5 @@ export interface SongConfig {
   harmonyTimeline: HarmonySpanConfig[];
   grooveLevels: GrooveLevelConfig[];
   impactPalette?: ImpactPaletteConfig;
+  soloVoice?: SoloVoiceConfig;
 }

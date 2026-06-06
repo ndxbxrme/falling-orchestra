@@ -53,6 +53,9 @@ const PLAYFIELD_GUIDE_COLOR = "#6bdce6";
 const PLAYFIELD_WARN_COLOR = "#ff5a53";
 const BUMPER_CORE_COLOR = "#82f8ff";
 const BUMPER_DIM_COLOR = "#182430";
+const SOLO_DEBUG =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 interface PulseEffect {
   mesh: Mesh;
@@ -536,7 +539,13 @@ export class World {
           ? this.createFlatMaterial(`special-${this.nextObjectId}-core`, "#fff9dc")
           : this.createFlatMaterial(`${type}-${this.nextObjectId}-core`, definition.glowColor);
 
-    const visual = this.createSignalBallVisual(`object-${this.nextObjectId}`, radius, outerMaterial, innerMaterial);
+    const visual = this.createSignalBallVisual(
+      `object-${this.nextObjectId}`,
+      radius,
+      outerMaterial,
+      innerMaterial,
+      type === "solo" ? "solo" : "default",
+    );
     const mesh = visual.outer;
     const coreMesh = visual.core;
 
@@ -546,6 +555,7 @@ export class World {
       noteFamily: definition.noteFamily,
       specialFormationId,
       specialCaught: false,
+      soloCaught: false,
       position: new Vector2(
         clamp(x, this.bounds.left + 1.6, this.bounds.right - 1.6),
         this.bounds.top - 0.8 + Math.random() * 0.6,
@@ -585,6 +595,19 @@ export class World {
 
     this.tintMeshMaterials(object.mesh, "#69f5d8");
     this.tintMeshMaterials(object.coreMesh, "#ecfffa");
+  }
+
+  markSoloCaught(objectId: number): void {
+    const object = this.objects.find((candidate) => candidate.id === objectId);
+
+    if (!object || object.soloCaught) {
+      return;
+    }
+
+    object.soloCaught = true;
+    object.pulse = Math.max(object.pulse, 0.82);
+    this.tintMeshMaterials(object.mesh, "#ffd49a");
+    this.tintMeshMaterials(object.coreMesh, "#fff6e2");
   }
 
   update(
@@ -1262,7 +1285,9 @@ export class World {
     radius: number,
     outerMaterial: StandardMaterial,
     coreMaterial: StandardMaterial,
+    variant: "default" | "solo" = "default",
   ): { outer: Mesh; core: Mesh } {
+    const isSolo = variant === "solo";
     const outer = MeshBuilder.CreateTorus(`${name}-outer-ring`, {
       diameter: radius * 2,
       thickness: Math.max(0.04, radius * 0.11),
@@ -1273,8 +1298,8 @@ export class World {
     outer.visibility = SIGNAL_RING_ALPHA;
 
     const reticleRing = MeshBuilder.CreateTorus(`${name}-reticle-ring`, {
-      diameter: radius * 1.34,
-      thickness: Math.max(0.02, radius * 0.05),
+      diameter: radius * (isSolo ? 1.46 : 1.34),
+      thickness: Math.max(0.02, radius * (isSolo ? 0.058 : 0.05)),
       tessellation: 32,
     }, this.scene);
     reticleRing.parent = outer;
@@ -1284,12 +1309,16 @@ export class World {
 
     for (const [index, angle] of [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5].entries()) {
       const tick = MeshBuilder.CreatePlane(`${name}-tick-${index}`, {
-        width: radius * 0.44,
-        height: Math.max(0.02, radius * 0.06),
+        width: radius * (isSolo ? 0.68 : 0.44),
+        height: Math.max(0.02, radius * (isSolo ? 0.068 : 0.06)),
       }, this.scene);
       tick.parent = outer;
       tick.material = this.createFlatMaterial(`${name}-tick-material-${index}`, outerMaterial.diffuseColor.toHexString(), SIGNAL_TICK_ALPHA);
-      tick.position.set(Math.cos(angle) * radius * 1.08, Math.sin(angle) * radius * 1.08, 0.03);
+      tick.position.set(
+        Math.cos(angle) * radius * (isSolo ? 1.22 : 1.08),
+        Math.sin(angle) * radius * (isSolo ? 1.22 : 1.08),
+        0.03,
+      );
       tick.rotation.z = angle;
     }
 
@@ -1317,28 +1346,28 @@ export class World {
     centerDot.position.z = -0.02;
 
     const leftCross = MeshBuilder.CreatePlane(`${name}-cross-left`, {
-      width: radius * 0.28,
-      height: Math.max(0.018, radius * 0.04),
+      width: radius * (isSolo ? 0.42 : 0.28),
+      height: Math.max(0.018, radius * (isSolo ? 0.048 : 0.04)),
     }, this.scene);
     leftCross.parent = core;
-    leftCross.material = this.createFlatMaterial(`${name}-cross-left-material`, coreMaterial.diffuseColor.toHexString(), 0.46);
-    leftCross.position.set(-radius * 0.82, 0, 0.02);
+    leftCross.material = this.createFlatMaterial(`${name}-cross-left-material`, coreMaterial.diffuseColor.toHexString(), isSolo ? 0.6 : 0.46);
+    leftCross.position.set(-radius * (isSolo ? 1.08 : 0.82), 0, 0.02);
 
     const rightCross = leftCross.clone(`${name}-cross-right`);
     rightCross.parent = core;
-    rightCross.position.x = radius * 0.82;
+    rightCross.position.x = radius * (isSolo ? 1.08 : 0.82);
 
     const topCross = MeshBuilder.CreatePlane(`${name}-cross-top`, {
-      width: Math.max(0.018, radius * 0.04),
-      height: radius * 0.28,
+      width: Math.max(0.018, radius * (isSolo ? 0.048 : 0.04)),
+      height: radius * (isSolo ? 0.42 : 0.28),
     }, this.scene);
     topCross.parent = core;
-    topCross.material = this.createFlatMaterial(`${name}-cross-top-material`, coreMaterial.diffuseColor.toHexString(), 0.46);
-    topCross.position.set(0, radius * 0.82, 0.02);
+    topCross.material = this.createFlatMaterial(`${name}-cross-top-material`, coreMaterial.diffuseColor.toHexString(), isSolo ? 0.6 : 0.46);
+    topCross.position.set(0, radius * (isSolo ? 1.08 : 0.82), 0.02);
 
     const bottomCross = topCross.clone(`${name}-cross-bottom`);
     bottomCross.parent = core;
-    bottomCross.position.y = -radius * 0.82;
+    bottomCross.position.y = -radius * (isSolo ? 1.08 : 0.82);
 
     outer.metadata = {
       tintMaterials: [outerMaterial, reticleRing.material, ...outer.getChildMeshes().map((child) => child.material).filter((material): material is StandardMaterial => material instanceof StandardMaterial)],
@@ -1457,6 +1486,19 @@ export class World {
     object.velocity = object.velocity.subtract(tangent.scale(tangentVelocity * 0.025));
 
     const impact = -velocityAlongNormal;
+    if (object.type === "solo" && SOLO_DEBUG) {
+      console.debug("[SoloDebug] surface collision", {
+        objectId: object.id,
+        surface: surface.kind,
+        impact,
+        cooldown: object.cooldown,
+        threshold: GAME_CONFIG.surfaceCollisionThreshold,
+        willTrigger:
+          surface.musical &&
+          object.cooldown <= 0 &&
+          impact >= GAME_CONFIG.surfaceCollisionThreshold,
+      });
+    }
     if (surface.musical && object.cooldown <= 0 && impact >= GAME_CONFIG.surfaceCollisionThreshold) {
       object.cooldown = OBJECT_DEFINITIONS[object.type].cooldown;
       object.pulse = Math.min(1, object.pulse + impact * 0.045);

@@ -80,6 +80,11 @@ export const GAME_CONFIG = {
   wallBounce: 0.86,
   slopeBounce: 0.94,
   playerBounce: 0.96,
+  soloTriggerCooldownMin: 10,
+  soloTriggerCooldownMax: 18,
+  soloModeSpawnIntervalMin: 0.72,
+  soloModeSpawnIntervalMax: 1.18,
+  soloMaxConsecutiveMisses: 2,
 } as const;
 
 export interface ObjectDefinition {
@@ -155,5 +160,17 @@ export const OBJECT_DEFINITIONS: Record<ObjectType, ObjectDefinition> = {
     noteRange: [56, 82],
     cooldown: 0.3,
     gravityScale: 0.34,
+  },
+  solo: {
+    type: "solo",
+    noteFamily: "spark",
+    radius: 0.44,
+    bounce: 0.8,
+    mass: 1.05,
+    color: "#ffac58",
+    glowColor: "#fff1d0",
+    noteRange: [55, 79],
+    cooldown: 0.18,
+    gravityScale: 1,
   },
 };

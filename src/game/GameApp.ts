@@ -27,12 +27,21 @@ const MEGA_COMBO_REWARD = 2;
 const LAUNCH_COUNTDOWN_STEP_MS = 620;
 const LAUNCH_COUNTDOWN_STEPS = 4;
 const GROOVE_LANDING_AFTERGLOW_MS = 520;
+const SOLO_DEBUG =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 interface FormationProgress {
   total: number;
   touched: Set<number>;
   resolved: Set<number>;
   awarded: boolean;
+}
+
+interface SoloModeState {
+  active: boolean;
+  consecutiveMisses: number;
+  maxConsecutiveMisses: number;
 }
 
 interface GameAppOptions {
@@ -70,6 +79,12 @@ export class GameApp {
   private transitionState: TransitionState = { kind: "none" };
   private grooveLandingEndsAt = 0;
   private grooveLandingLevel: number | null = null;
+  private soloMode: SoloModeState = {
+    active: false,
+    consecutiveMisses: 0,
+    maxConsecutiveMisses: GAME_CONFIG.soloMaxConsecutiveMisses,
+  };
+  private activeSoloBallIds = new Set<number>();
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -263,6 +278,9 @@ export class GameApp {
     this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
     this.world.setEndingState(endingState?.progress ?? 0, endingState?.intensity ?? 0);
     this.world.setTransitionState(this.transitionState);
+    if (endingState && this.soloMode.active) {
+      this.endSoloMode(true);
+    }
 
     if (this.sessionPhase === "countdown" && performance.now() >= this.launchCountdownEndsAt) {
       this.setSessionPhase("playing");
@@ -292,7 +310,13 @@ export class GameApp {
 
     this.spawner.setEndingTaper(endingState?.progress ?? null);
     this.spawner.frozen = this.freezeSpawning || (endingState?.progress ?? 0) >= 0.72;
-    const requests = this.spawner.update(deltaTime, bounds, this.world.getObjectCount());
+    const requests = this.spawner.update(
+      deltaTime,
+      bounds,
+      this.world.getObjectCount(),
+      this.activeSoloBallIds.size,
+      this.hasActiveSpecialFormation(),
+    );
     for (const request of requests) {
       const object = this.world.spawnObject(
         request.type,
@@ -302,6 +326,10 @@ export class GameApp {
         request.specialFormationId,
         request.formationColor,
       );
+
+      if (object?.type === "solo") {
+        this.activeSoloBallIds.add(object.id);
+      }
 
       if (object && request.specialFormationId && request.formationTotal) {
         this.registerSpecialObject(request.specialFormationId, request.formationTotal, object.id);
@@ -390,6 +418,34 @@ export class GameApp {
   ): void {
     const bounds = this.world.getBounds();
     const normalizedX = clamp((x - bounds.left) / (bounds.right - bounds.left), 0, 1);
+
+    if (object.type === "solo") {
+      if (surface.kind === "player" && this.activeSoloBallIds.has(object.id)) {
+        const wasCaught = object.soloCaught === true;
+        if (!wasCaught) {
+          this.world.markSoloCaught(object.id);
+        }
+        if (SOLO_DEBUG) {
+          console.debug("[SoloDebug] handleSoloCatch", {
+            objectId: object.id,
+            surface: surface.kind,
+            wasCaught,
+            impact,
+            normalizedX,
+          });
+        }
+        this.handleSoloCatch(object, normalizedX, impact, x, y);
+      } else if (SOLO_DEBUG) {
+        console.debug("[SoloDebug] ignored solo impact", {
+          objectId: object.id,
+          surface: surface.kind,
+          active: this.activeSoloBallIds.has(object.id),
+          impact,
+        });
+      }
+      return;
+    }
+
     const pan = normalizedX * 2 - 1;
     const played = this.music.triggerImpact({
       family: object.noteFamily,
@@ -420,6 +476,10 @@ export class GameApp {
     y: number,
     impact: number,
   ): void {
+    if (object.type === "solo" || other.type === "solo") {
+      return;
+    }
+
     const bounds = this.world.getBounds();
     const normalizedX = clamp((x - bounds.left) / (bounds.right - bounds.left), 0, 1);
     const pan = normalizedX * 2 - 1;
@@ -489,6 +549,7 @@ export class GameApp {
   }
 
   private reset(): void {
+    this.endSoloMode(true);
     this.spawner.reset();
     this.world.reset();
     this.world.setPlayerX(this.playerX = 0);
@@ -501,6 +562,7 @@ export class GameApp {
     this.transitionState = { kind: "none" };
     this.grooveLandingEndsAt = 0;
     this.grooveLandingLevel = null;
+    this.activeSoloBallIds.clear();
     this.music.resetGroovePlayback();
     this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
   }
@@ -531,6 +593,10 @@ export class GameApp {
   }
 
   private handleObjectRemoved(object: MusicalObject): void {
+    if (this.activeSoloBallIds.delete(object.id) && !object.soloCaught) {
+      this.handleSoloMiss();
+    }
+
     if (!object.specialFormationId) {
       return;
     }
@@ -612,6 +678,78 @@ export class GameApp {
     this.spawner.setSpawnProfile(grooveLevel?.spawnProfile);
   }
 
+  private handleSoloCatch(
+    object: MusicalObject,
+    normalizedX: number,
+    impact: number,
+    x: number,
+    y: number,
+  ): void {
+    if (!this.soloMode.active) {
+      this.startSoloMode();
+    } else {
+      this.soloMode.consecutiveMisses = 0;
+    }
+
+    const played = this.music.triggerSoloNote({
+      noteRange: object.noteRange,
+      normalizedX,
+      impact,
+    });
+
+    if (!this.debugLabels) {
+      return;
+    }
+
+    const screen = this.world.worldToScreen(x, y);
+    this.overlay.showNoteLabel(played.label, screen.x, screen.y, played.color);
+  }
+
+  private handleSoloMiss(): void {
+    if (!this.soloMode.active) {
+      return;
+    }
+
+    this.soloMode.consecutiveMisses += 1;
+    if (this.soloMode.consecutiveMisses >= this.soloMode.maxConsecutiveMisses) {
+      this.endSoloMode(false);
+    }
+  }
+
+  private startSoloMode(): void {
+    this.soloMode.active = true;
+    this.soloMode.consecutiveMisses = 0;
+    this.spawner.setSoloModeActive(true);
+    this.overlay.showNoteLabel(
+      "Solo Mode",
+      34,
+      this.canvas.clientHeight - 210,
+      "#ffcf97",
+      "callout",
+    );
+  }
+
+  private endSoloMode(silent: boolean): void {
+    if (!this.soloMode.active) {
+      return;
+    }
+
+    this.soloMode.active = false;
+    this.soloMode.consecutiveMisses = 0;
+    this.activeSoloBallIds.clear();
+    this.spawner.setSoloModeActive(false);
+    this.music.stopSoloVoice();
+    if (!silent) {
+      this.overlay.showNoteLabel(
+        "Phrase Lost",
+        34,
+        this.canvas.clientHeight - 210,
+        "#ffd2c3",
+        "callout",
+      );
+    }
+  }
+
   private getOverlayState(): OverlayState {
     return {
       sessionPhase: this.sessionPhase,
@@ -633,12 +771,27 @@ export class GameApp {
       activeFormationCaught: this.getActiveFormationSummary().caught,
       activeFormationRequired: this.getActiveFormationSummary().required,
       activeFormationVisible: this.getActiveFormationSummary().visible,
+      soloModeActive: this.soloMode.active,
+      soloMissesRemaining: Math.max(
+        0,
+        this.soloMode.maxConsecutiveMisses - this.soloMode.consecutiveMisses,
+      ),
       paused: this.paused,
       muted: this.muted,
       freezeSpawning: this.freezeSpawning,
       debugLabels: this.debugLabels,
       masterVolume: this.music.volume,
     };
+  }
+
+  private hasActiveSpecialFormation(): boolean {
+    for (const progress of this.specialFormations.values()) {
+      if (!progress.awarded) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private getActiveFormationSummary(): { caught: number; required: number; visible: boolean } {
