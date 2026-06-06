@@ -78,7 +78,14 @@ export interface GrooveFxProfileConfig {
   reverbBoost: number;
   megaBoost: number;
   filterOpen: number;
-  wobbleDepth: number;
+  wobbleDepth?: number;
+  delayWobbleDepth?: number;
+  filterResonance?: number;
+  filterSweepDepth?: number;
+  filterLfoRateA?: number;
+  filterLfoRateB?: number;
+  filterLfoDepthA?: number;
+  filterLfoDepthB?: number;
 }
 
 export interface MegaFxMacroConfig {

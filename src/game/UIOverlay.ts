@@ -27,7 +27,9 @@ export class UIOverlay {
   private grooveBoostAlert!: HTMLDivElement;
   private grooveBoostText!: HTMLElement;
   private flashLayer!: HTMLDivElement;
+  private grooveLandingFlash!: HTMLDivElement;
   private hypeLayer!: HTMLDivElement;
+  private persistentBanner!: HTMLDivElement;
   private noteLayer!: HTMLDivElement;
   private objectCountValue!: HTMLElement;
   private perfValue!: HTMLElement;
@@ -54,7 +56,9 @@ export class UIOverlay {
   private freezeToggle!: HTMLInputElement;
   private debugToggle!: HTMLInputElement;
   private bannerQueue: Array<{ text: string; color: string }> = [];
-  private activeBanner?: HTMLDivElement;
+  private activeBanner = false;
+  private bannerTimeoutId?: number;
+  private grooveLandingFlashTimeoutId?: number;
 
   constructor(private root: HTMLDivElement, private callbacks: OverlayCallbacks) {
     this.render();
@@ -276,7 +280,7 @@ export class UIOverlay {
               <li><strong>A / D</strong> or <strong>Left / Right</strong> to move the paddle. <strong>Up / Down</strong> changes the spawn center. In live mode, movement is arrow keys only.</li>
               <li><strong>Touch</strong>: drag anywhere on the playfield to steer the paddle directly.</li>
               <li><strong>Click</strong> or tap the arena to wake audio if it has not started yet.</li>
-              <li><strong>L</strong> toggles live mode. Roots map to <strong>Q 2 W 3 E R 5 T 6 Y 7 U I</strong> and modes map to <strong>A S D F G H</strong>.</li>
+              <li><strong>L</strong> toggles live mode. Roots map to <strong>Q 2 W 3 E R 5 T 6 Y 7 U I</strong> and modes map to <strong>A S D F G H J K ; Z X C V</strong>.</li>
               <li><strong>Esc</strong> hides or shows these panels. <strong>P</strong> pauses, <strong>M</strong> mutes, and <strong>Shift+R</strong> resets while live mode is on.</li>
               <li>Catch most of a special formation with your paddle to charge the groove meter and push the song into higher groove levels.</li>
             </ul>
@@ -318,6 +322,12 @@ export class UIOverlay {
     this.startCard = this.query<HTMLDivElement>("[data-start-card]");
     this.hypeLayer = this.query<HTMLDivElement>("[data-hype-layer]");
     this.noteLayer = this.query<HTMLDivElement>("[data-note-layer]");
+    this.grooveLandingFlash = document.createElement("div");
+    this.grooveLandingFlash.className = "groove-landing-flash";
+    this.flashLayer.append(this.grooveLandingFlash);
+    this.persistentBanner = document.createElement("div");
+    this.persistentBanner.className = "note-label banner";
+    this.hypeLayer.append(this.persistentBanner);
     this.objectCountValue = this.query("[data-object-count]");
     this.perfValue = this.query("[data-perf-value]");
     this.modeValue = this.query("[data-mode-value]");
@@ -430,38 +440,39 @@ export class UIOverlay {
       return;
     }
 
-    const label = document.createElement("div");
-    label.className = "note-label banner";
-    label.textContent = next.text;
-    label.style.left = "50%";
-    label.style.top = "50%";
-    label.style.color = next.color;
-    this.hypeLayer.append(label);
-    this.activeBanner = label;
+    this.activeBanner = true;
+    this.persistentBanner.textContent = next.text;
+    this.persistentBanner.style.left = "50%";
+    this.persistentBanner.style.top = "50%";
+    this.persistentBanner.style.color = next.color;
+    this.persistentBanner.classList.remove("active");
+    void this.persistentBanner.offsetWidth;
+    this.persistentBanner.classList.add("active");
 
-    window.setTimeout(() => {
-      label.remove();
-      if (this.activeBanner === label) {
-        this.activeBanner = undefined;
-      }
+    window.clearTimeout(this.bannerTimeoutId);
+    this.bannerTimeoutId = window.setTimeout(() => {
+      this.persistentBanner.classList.remove("active");
+      this.activeBanner = false;
       this.maybeShowNextBanner();
     }, 720);
   }
 
   triggerGrooveLandingFlash(): void {
-    const flash = document.createElement("div");
-    flash.className = "groove-landing-flash";
-    this.flashLayer.append(flash);
+    this.grooveLandingFlash.classList.remove("active");
+    void this.grooveLandingFlash.offsetWidth;
+    this.grooveLandingFlash.classList.add("active");
 
-    window.setTimeout(() => {
-      flash.remove();
+    window.clearTimeout(this.grooveLandingFlashTimeoutId);
+    this.grooveLandingFlashTimeoutId = window.setTimeout(() => {
+      this.grooveLandingFlash.classList.remove("active");
     }, 320);
   }
 
   playLaunchCountdown(): void {
     this.bannerQueue = [];
-    this.activeBanner?.remove();
-    this.activeBanner = undefined;
+    this.activeBanner = false;
+    window.clearTimeout(this.bannerTimeoutId);
+    this.persistentBanner.classList.remove("active");
     const steps = ["4", "3", "2", "1"];
     steps.forEach((step, index) => {
       window.setTimeout(() => {

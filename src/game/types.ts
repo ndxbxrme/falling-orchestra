@@ -9,7 +9,14 @@ export type ScaleModeName =
   | "ionian"
   | "aeolian"
   | "dorian"
+  | "phrygian"
+  | "lydian"
+  | "locrian"
   | "mixolydian"
+  | "harmonicMinor"
+  | "melodicMinor"
+  | "bluesMajor"
+  | "bluesMinor"
   | "pentatonicMajor"
   | "pentatonicMinor";
 export type RootNoteName =

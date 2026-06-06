@@ -155,4 +155,11 @@ const LIVE_MODE_HOTKEYS: Partial<Record<string, ScaleModeName>> = {
   KeyF: "mixolydian",
   KeyG: "pentatonicMajor",
   KeyH: "pentatonicMinor",
+  KeyJ: "phrygian",
+  KeyK: "lydian",
+  Semicolon: "locrian",
+  KeyZ: "harmonicMinor",
+  KeyX: "melodicMinor",
+  KeyC: "bluesMajor",
+  KeyV: "bluesMinor",
 };

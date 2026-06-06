@@ -97,7 +97,14 @@ const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
     reverbBoost: 0.12,
     megaBoost: 0.24,
     filterOpen: 800,
-    wobbleDepth: 0.14,
+    wobbleDepth: 0,
+    delayWobbleDepth: 0,
+    filterResonance: 7.5,
+    filterSweepDepth: 1480,
+    filterLfoRateA: 0.031,
+    filterLfoRateB: 0.009,
+    filterLfoDepthA: 0.72,
+    filterLfoDepthB: 0.48,
   },
   megaFxMacro: {
     duration: 1,
@@ -139,6 +146,7 @@ export class MusicSystem {
   private masterGain?: GainNode;
   private compressor?: DynamicsCompressorNode;
   private impactMixGain?: GainNode;
+  private impactMotionFilter?: BiquadFilterNode;
   private dryBusGain?: GainNode;
   private driveBusInput?: GainNode;
   private driveBusFilter?: BiquadFilterNode;
@@ -1119,6 +1127,7 @@ export class MusicSystem {
 
     const ctx = this.audioContext;
     const impactMix = ctx.createGain();
+    const motionFilter = ctx.createBiquadFilter();
     const dryBus = ctx.createGain();
     const driveInput = ctx.createGain();
     const driveFilter = ctx.createBiquadFilter();
@@ -1141,6 +1150,7 @@ export class MusicSystem {
     const megaPanner = ctx.createStereoPanner();
 
     impactMix.gain.value = 1;
+    motionFilter.type = "lowpass";
     dryBus.gain.value = 0;
     driveInput.gain.value = 1;
     driveGain.gain.value = 0;
@@ -1153,7 +1163,8 @@ export class MusicSystem {
     megaWet.gain.value = 0;
     megaPanner.pan.value = 0;
 
-    impactMix.connect(this.masterGain);
+    impactMix.connect(motionFilter);
+    motionFilter.connect(this.masterGain);
 
     dryBus.connect(impactMix);
 
@@ -1187,6 +1198,7 @@ export class MusicSystem {
     megaWet.connect(impactMix);
 
     this.impactMixGain = impactMix;
+    this.impactMotionFilter = motionFilter;
     this.dryBusGain = dryBus;
     this.driveBusInput = driveInput;
     this.driveBusFilter = driveFilter;
@@ -1211,6 +1223,7 @@ export class MusicSystem {
 
   private updateImpactFxState(now: number): void {
     if (
+      !this.impactMotionFilter ||
       !this.dryBusGain ||
       !this.driveBusFilter ||
       !this.driveBusShaper ||
@@ -1231,11 +1244,35 @@ export class MusicSystem {
     }
 
     const groove = this.getGrooveFxIntensity();
-    const profile = this.impactPalette.grooveFxProfile;
+    const profile = this.getResolvedGrooveFxProfile();
     const macro = this.getMegaMacroSnapshot(now);
-    const wobblePhase = now * Math.PI * 0.45;
-    const wobble = Math.sin(wobblePhase) * (0.02 + groove * profile.wobbleDepth * 0.08);
+    const lfoA = Math.sin(now * Math.PI * 2 * profile.filterLfoRateA);
+    const lfoB = Math.sin(now * Math.PI * 2 * profile.filterLfoRateB + 1.7);
+    const filterSweep =
+      (lfoA * profile.filterLfoDepthA + lfoB * profile.filterLfoDepthB) *
+      profile.filterSweepDepth *
+      (0.34 + groove * 0.66);
+    const delayWobble =
+      Math.sin(now * Math.PI * 2 * 0.17) * (0.002 + groove * profile.delayWobbleDepth * 0.01);
     const width = (macro.x * 2 - 1) * macro.intensity * this.impactPalette.megaFxMacro.xToWidth;
+
+    this.impactMotionFilter.frequency.setTargetAtTime(
+      clamp(
+        1450 +
+          groove * (profile.filterOpen * 1.05) +
+          filterSweep +
+          macro.y * this.impactPalette.megaFxMacro.yToFilter * macro.intensity,
+        260,
+        9600,
+      ),
+      now,
+      0.18,
+    );
+    this.impactMotionFilter.Q.setTargetAtTime(
+      clamp(profile.filterResonance + groove * 1.1 + macro.y * 0.85 * macro.intensity, 0.8, 18),
+      now,
+      0.16,
+    );
 
     this.dryBusGain.gain.setTargetAtTime(this.impactPalette.buses.dry.gain, now, 0.03);
 
@@ -1244,12 +1281,18 @@ export class MusicSystem {
         1100 +
           this.impactPalette.buses.drive.tone * 1000 +
           groove * profile.filterOpen +
+          filterSweep * 0.42 +
           macro.y * this.impactPalette.megaFxMacro.yToFilter * macro.intensity,
         420,
         6400,
       ),
       now,
       0.06,
+    );
+    this.driveBusFilter.Q.setTargetAtTime(
+      clamp(1.2 + profile.filterResonance * 0.24 + groove * 0.4, 0.7, 9),
+      now,
+      0.08,
     );
     this.driveBusGain.gain.setTargetAtTime(
       this.impactPalette.buses.drive.gain + groove * profile.driveBoost + macro.y * 0.12 * macro.intensity,
@@ -1261,14 +1304,19 @@ export class MusicSystem {
     ) as unknown as Float32Array<ArrayBuffer>;
 
     this.delayBusFilter.frequency.setTargetAtTime(
-      clamp(1900 + groove * 900 + macro.y * 700 * macro.intensity, 700, 5200),
+      clamp(1900 + groove * 900 + filterSweep * 0.22 + macro.y * 700 * macro.intensity, 700, 5200),
       now,
       0.08,
+    );
+    this.delayBusFilter.Q.setTargetAtTime(
+      clamp(0.7 + profile.filterResonance * 0.12 + groove * 0.22, 0.4, 5),
+      now,
+      0.1,
     );
     this.delayBusNode.delayTime.setTargetAtTime(
       clamp(
         (this.impactPalette.buses.delay.delayTime ?? 0.26) +
-          wobble +
+          delayWobble +
           (macro.x - 0.5) * this.impactPalette.megaFxMacro.xToDelay * macro.intensity,
         0.08,
         0.58,
@@ -1292,9 +1340,14 @@ export class MusicSystem {
     );
 
     this.reverbBusFilter.frequency.setTargetAtTime(
-      clamp(1400 + groove * 700 + macro.y * 380 * macro.intensity, 500, 4200),
+      clamp(1400 + groove * 700 + filterSweep * 0.16 + macro.y * 380 * macro.intensity, 500, 4200),
       now,
       0.1,
+    );
+    this.reverbBusFilter.Q.setTargetAtTime(
+      clamp(0.45 + profile.filterResonance * 0.08 + groove * 0.12, 0.2, 3.5),
+      now,
+      0.12,
     );
     this.reverbBusWet.gain.setTargetAtTime(
       this.impactPalette.buses.reverb.gain + groove * profile.reverbBoost + macro.intensity * 0.06,
@@ -1303,12 +1356,23 @@ export class MusicSystem {
     );
 
     this.megaBusFilter.frequency.setTargetAtTime(
-      clamp(900 + groove * 1200 + macro.y * 1100 * macro.intensity, 260, 7000),
+      clamp(900 + groove * 1200 + filterSweep * 0.34 + macro.y * 1100 * macro.intensity, 260, 7000),
       now,
       0.04,
     );
+    this.megaBusFilter.Q.setTargetAtTime(
+      clamp(1.8 + profile.filterResonance * 0.3 + groove * 0.55, 0.8, 11),
+      now,
+      0.06,
+    );
     this.megaBusDelay.delayTime.setTargetAtTime(
-      clamp((this.impactPalette.buses.megaFx.delayTime ?? 0.18) + wobble * 1.6 + macro.x * 0.08 * macro.intensity, 0.05, 0.42),
+      clamp(
+        (this.impactPalette.buses.megaFx.delayTime ?? 0.18) +
+          delayWobble * 0.8 +
+          macro.x * 0.08 * macro.intensity,
+        0.05,
+        0.42,
+      ),
       now,
       0.03,
     );
@@ -1321,6 +1385,22 @@ export class MusicSystem {
     this.megaBusShaper.curve = this.createDriveCurve(
       clamp(this.impactPalette.buses.megaFx.drive + groove * 0.26 + macro.y * this.impactPalette.megaFxMacro.yToDrive * macro.intensity, 0, 1.4),
     ) as unknown as Float32Array<ArrayBuffer>;
+  }
+
+  private getResolvedGrooveFxProfile() {
+    const fallback = DEFAULT_IMPACT_PALETTE.grooveFxProfile;
+    const profile = this.impactPalette.grooveFxProfile;
+    return {
+      ...fallback,
+      ...profile,
+      delayWobbleDepth: profile.delayWobbleDepth ?? 0,
+      filterResonance: profile.filterResonance ?? fallback.filterResonance ?? 7.5,
+      filterSweepDepth: profile.filterSweepDepth ?? fallback.filterSweepDepth ?? 1480,
+      filterLfoRateA: profile.filterLfoRateA ?? fallback.filterLfoRateA ?? 0.031,
+      filterLfoRateB: profile.filterLfoRateB ?? fallback.filterLfoRateB ?? 0.009,
+      filterLfoDepthA: profile.filterLfoDepthA ?? fallback.filterLfoDepthA ?? 0.72,
+      filterLfoDepthB: profile.filterLfoDepthB ?? fallback.filterLfoDepthB ?? 0.48,
+    };
   }
 
   private routeImpactVoice(
