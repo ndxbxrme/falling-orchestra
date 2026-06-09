@@ -252,8 +252,7 @@ export class GameApp {
       },
     });
 
-    this.canvas.addEventListener("pointerdown", this.handleGameplayPointerDown);
-    this.interactionRoot.addEventListener("pointerdown", this.handleGameplayPointerDown);
+    window.addEventListener("pointerdown", this.handleGameplayPointerDown);
     window.addEventListener("pointermove", this.handleGameplayPointerMove, { passive: false });
     window.addEventListener("pointerup", this.handleGameplayPointerUp);
     window.addEventListener("pointercancel", this.handleGameplayPointerUp);
@@ -300,8 +299,7 @@ export class GameApp {
   }
 
   dispose(): void {
-    this.canvas.removeEventListener("pointerdown", this.handleGameplayPointerDown);
-    this.interactionRoot.removeEventListener("pointerdown", this.handleGameplayPointerDown);
+    window.removeEventListener("pointerdown", this.handleGameplayPointerDown);
     window.removeEventListener("pointermove", this.handleGameplayPointerMove);
     window.removeEventListener("pointerup", this.handleGameplayPointerUp);
     window.removeEventListener("pointercancel", this.handleGameplayPointerUp);

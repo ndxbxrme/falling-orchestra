@@ -3,5 +3,6 @@ export * from "./schema";
 export * from "./registry";
 
 export * from "./presets/brutalist-club";
+export * from "./presets/gatecrasher-reactor";
 export * from "./presets/radar-shrine";
 export * from "./presets/scaffold-test";
