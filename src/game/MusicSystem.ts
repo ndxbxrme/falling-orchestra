@@ -26,6 +26,8 @@ const MIN_SCHEDULE_LOOKAHEAD = 0.012;
 const TRANSPORT_LOOKAHEAD = 0.16;
 const MAX_ACTIVE_IMPACT_VOICES = 36;
 const MAX_ACTIVE_MEGA_VOICES = 8;
+const DEFAULT_LOOP_BUS_GAIN = 1;
+const DEFAULT_PLAYER_BUS_GAIN = 0.62;
 const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
   voices: {
     bell: {
@@ -134,9 +136,13 @@ export class MusicSystem {
   paused = false;
   volume = 0.72;
   currentGrooveLevel = 1;
+  loopBusVolume = DEFAULT_LOOP_BUS_GAIN;
+  playerBusVolume = DEFAULT_PLAYER_BUS_GAIN;
 
   private audioContext?: AudioContext;
   private masterGain?: GainNode;
+  private loopBusGain?: GainNode;
+  private playerBusGain?: GainNode;
   private compressor?: DynamicsCompressorNode;
   private impactMixGain?: GainNode;
   private impactMotionFilter?: BiquadFilterNode;
@@ -277,6 +283,12 @@ export class MusicSystem {
 
       this.masterGain = this.audioContext.createGain();
       this.masterGain.gain.value = this.muted ? 0 : this.volume;
+      this.loopBusGain = this.audioContext.createGain();
+      this.loopBusGain.gain.value = this.loopBusVolume;
+      this.playerBusGain = this.audioContext.createGain();
+      this.playerBusGain.gain.value = this.playerBusVolume;
+      this.loopBusGain.connect(this.masterGain);
+      this.playerBusGain.connect(this.masterGain);
       this.masterGain.connect(this.compressor);
       this.compressor.connect(this.audioContext.destination);
       this.noiseBuffer = this.createNoiseBuffer();
@@ -332,6 +344,22 @@ export class MusicSystem {
   setVolume(volume: number): void {
     this.volume = volume;
     this.syncMasterVolume();
+  }
+
+  setLoopBusVolume(volume: number): void {
+    this.loopBusVolume = clamp(volume, 0, 2);
+    if (!this.loopBusGain || !this.audioContext) {
+      return;
+    }
+    this.loopBusGain.gain.setTargetAtTime(this.loopBusVolume, this.audioContext.currentTime, 0.02);
+  }
+
+  setPlayerBusVolume(volume: number): void {
+    this.playerBusVolume = clamp(volume, 0, 2);
+    if (!this.playerBusGain || !this.audioContext) {
+      return;
+    }
+    this.playerBusGain.gain.setTargetAtTime(this.playerBusVolume, this.audioContext.currentTime, 0.02);
   }
 
   setGrooveLevel(level: number): void {
@@ -590,7 +618,7 @@ export class MusicSystem {
   }
 
   update(): void {
-    if (!this.audioContext || !this.masterGain) {
+    if (!this.audioContext || !this.loopBusGain) {
       return;
     }
 
@@ -1196,6 +1224,11 @@ export class MusicSystem {
       return;
     }
 
+    const loopBusGain = this.loopBusGain;
+    if (!loopBusGain) {
+      return;
+    }
+
     const source = this.audioContext.createBufferSource();
     const gainNode = this.audioContext.createGain();
     const now = this.audioContext.currentTime;
@@ -1203,7 +1236,7 @@ export class MusicSystem {
     source.buffer = buffer;
     gainNode.gain.setValueAtTime(kind === "intro" ? 0.96 : 1, when);
     source.connect(gainNode);
-    gainNode.connect(this.masterGain);
+    gainNode.connect(loopBusGain);
     logLoopDebug("scheduling groove clip", {
       level,
       kind,
@@ -1275,7 +1308,7 @@ export class MusicSystem {
   }
 
   private initializeImpactGraph(): void {
-    if (!this.audioContext || !this.masterGain || this.impactMixGain) {
+    if (!this.audioContext || !this.playerBusGain || this.impactMixGain) {
       return;
     }
 
@@ -1318,7 +1351,7 @@ export class MusicSystem {
     megaPanner.pan.value = 0;
 
     impactMix.connect(motionFilter);
-    motionFilter.connect(this.masterGain);
+    motionFilter.connect(this.playerBusGain);
 
     dryBus.connect(impactMix);
 

@@ -36,7 +36,7 @@ export class UIOverlay {
   private soloFill!: HTMLDivElement;
   private quickPauseButton!: HTMLButtonElement;
   private quickMuteButton!: HTMLButtonElement;
-  private bannerQueue: Array<{ text: string; color: string }> = [];
+  private bannerQueue: Array<{ text: string; color: string; x: number; y: number }> = [];
   private activeBanner = false;
   private bannerTimeoutId?: number;
   private grooveLandingFlashTimeoutId?: number;
@@ -98,7 +98,7 @@ export class UIOverlay {
     variant: "note" | "banner" | "callout" | "callout-right" = "note",
   ): void {
     if (variant === "banner") {
-      this.enqueueBanner(text, color);
+      this.enqueueBanner(text, color, x, y);
       return;
     }
 
@@ -246,8 +246,8 @@ export class UIOverlay {
     }
   }
 
-  private enqueueBanner(text: string, color: string): void {
-    this.bannerQueue.push({ text: text.toUpperCase(), color });
+  private enqueueBanner(text: string, color: string, x: number, y: number): void {
+    this.bannerQueue.push({ text: text.toUpperCase(), color, x, y });
     this.maybeShowNextBanner();
   }
 
@@ -264,8 +264,8 @@ export class UIOverlay {
 
     this.activeBanner = true;
     this.persistentBanner.textContent = next.text;
-    this.persistentBanner.style.left = "50%";
-    this.persistentBanner.style.top = "50%";
+    this.persistentBanner.style.left = `${next.x}px`;
+    this.persistentBanner.style.top = `${next.y}px`;
     this.persistentBanner.style.color = next.color;
     this.persistentBanner.classList.remove("active");
     void this.persistentBanner.offsetWidth;
@@ -298,7 +298,7 @@ export class UIOverlay {
     const steps = ["4", "3", "2", "1"];
     steps.forEach((step, index) => {
       window.setTimeout(() => {
-        this.enqueueBanner(step, "#eaf7ff");
+        this.enqueueBanner(step, "#eaf7ff", window.innerWidth * 0.5, window.innerHeight * 0.5);
       }, index * 620);
     });
   }
