@@ -701,7 +701,7 @@ export class GameApp {
       this.overlay.showNoteLabel(
         "Mega Ball",
         this.canvas.clientWidth * 0.5,
-        152,
+        this.getResponsiveBannerY(152),
         "#fff178",
         "banner",
       );
@@ -713,7 +713,7 @@ export class GameApp {
   private awardGroove(amount: number, label: string, color: string, y: number): void {
     const previousCharge = Number.isFinite(this.grooveCharge) ? this.grooveCharge : 0;
     this.grooveCharge = clamp(previousCharge + amount, 0, GROOVE_TARGET);
-    this.overlay.showNoteLabel(label, this.canvas.clientWidth * 0.5, y, color, "banner");
+    this.overlay.showNoteLabel(label, this.canvas.clientWidth * 0.5, this.getResponsiveBannerY(y), color, "banner");
     this.syncGrooveUnlocks();
   }
 
@@ -726,7 +726,7 @@ export class GameApp {
       this.overlay.showNoteLabel(
         `Groove ${nextLevel}`,
         this.canvas.clientWidth * 0.5,
-        84,
+        this.getResponsiveBannerY(84),
         "#9fedff",
         "banner",
       );
@@ -742,7 +742,13 @@ export class GameApp {
     const nextLevel = this.grooveLevels[currentIndex + 1];
     this.grooveCharge = Math.max(this.grooveCharge, ((currentIndex + 1) / Math.max(1, this.grooveLevels.length - 1)) * GROOVE_TARGET);
     this.music.setGrooveLevel(nextLevel);
-    this.overlay.showNoteLabel(`Groove ${nextLevel}`, this.canvas.clientWidth * 0.5, 84, "#9fedff", "banner");
+    this.overlay.showNoteLabel(
+      `Groove ${nextLevel}`,
+      this.canvas.clientWidth * 0.5,
+      this.getResponsiveBannerY(84),
+      "#9fedff",
+      "banner",
+    );
   }
 
   private getRequiredFormationCatches(total: number): number {
@@ -804,7 +810,7 @@ export class GameApp {
     this.overlay.showNoteLabel(
       "Solo Mode",
       this.canvas.clientWidth - 34,
-      this.canvas.clientHeight - 210,
+      this.canvas.clientHeight - (window.matchMedia("(pointer: coarse)").matches ? 170 : 210),
       "#ffcf97",
       "callout-right",
     );
@@ -826,11 +832,18 @@ export class GameApp {
       this.overlay.showNoteLabel(
         "Solo Complete",
         this.canvas.clientWidth * 0.5,
-        118,
+        this.getResponsiveBannerY(118),
         "#ffd7b2",
         "banner",
       );
     }
+  }
+
+  private getResponsiveBannerY(baseY: number): number {
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      return baseY + 56;
+    }
+    return baseY;
   }
 
   private getOverlayState(): OverlayState {

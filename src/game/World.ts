@@ -479,7 +479,7 @@ export class World {
     const height = this.engine.getRenderHeight();
     const aspect = width / Math.max(height, 1);
     const halfHeight = GAME_CONFIG.worldHalfHeight;
-    const halfWidth = halfHeight * aspect;
+    const halfWidth = this.getResponsiveWorldHalfWidth(halfHeight, aspect);
 
     this.bounds = {
       left: -halfWidth,
@@ -2023,7 +2023,18 @@ export class World {
   }
 
   private getResponsivePlayerWidth(): number {
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      return GAME_CONFIG.playerWidth * 0.88;
+    }
     return GAME_CONFIG.playerWidth;
+  }
+
+  private getResponsiveWorldHalfWidth(halfHeight: number, aspect: number): number {
+    const baseHalfWidth = halfHeight * aspect;
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      return Math.max(baseHalfWidth, 5.5);
+    }
+    return baseHalfWidth;
   }
 
   private getResponsiveObjectScale(): number {

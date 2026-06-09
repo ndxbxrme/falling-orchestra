@@ -115,12 +115,14 @@ export class AppShell {
     this.libraryState = loadLibraryState();
 
     this.libraryRoot.addEventListener("click", this.handleLibraryClick);
+    this.sessionUiRoot.addEventListener("click", this.handleLibraryClick);
     this.render();
   }
 
   dispose(): void {
     this.clearPendingAdvance();
     this.libraryRoot.removeEventListener("click", this.handleLibraryClick);
+    this.sessionUiRoot.removeEventListener("click", this.handleLibraryClick);
     this.disposeGame();
     this.previewPlayer.dispose();
   }
