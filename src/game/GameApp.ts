@@ -225,9 +225,6 @@ export class GameApp {
       onPatternChange: (value: SpawnPattern) => {
         this.spawner.spawnPattern = value;
       },
-      onHudToggle: () => {
-        this.toggleHud();
-      },
       onPauseToggle: () => {
         this.togglePause();
       },

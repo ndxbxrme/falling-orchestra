@@ -8,7 +8,6 @@ interface OverlayCallbacks {
   onModeChange?: (value: ScaleModeName) => void;
   onSpawnIntervalChange?: (value: number) => void;
   onPatternChange?: (value: SpawnPattern) => void;
-  onHudToggle: () => void;
   onPauseToggle: () => void;
   onReset?: () => void;
   onMuteToggle: () => void;
@@ -35,7 +34,6 @@ export class UIOverlay {
   private soloSection!: HTMLDivElement;
   private soloValue!: HTMLElement;
   private soloFill!: HTMLDivElement;
-  private hudButton!: HTMLButtonElement;
   private quickPauseButton!: HTMLButtonElement;
   private quickMuteButton!: HTMLButtonElement;
   private bannerQueue: Array<{ text: string; color: string }> = [];
@@ -86,7 +84,6 @@ export class UIOverlay {
     );
     this.setText(this.quickPauseButton, state.paused ? "Resume" : "Pause");
     this.setText(this.quickMuteButton, state.muted ? "Unmute" : "Mute");
-    this.setText(this.hudButton, state.hudVisible ? "Hide UI" : "Show UI");
     this.setClass(this.hudTop, "hidden", !state.hudVisible);
     const sessionStarted = state.sessionPhase !== "idle";
     this.setClass(this.quickDock, "hidden", !sessionStarted);
@@ -127,7 +124,6 @@ export class UIOverlay {
     this.root.innerHTML = `
       <div class="hud-shell">
         <div class="quick-dock hidden">
-          <button type="button" data-hud-button>Hide UI</button>
           <button type="button" data-quick-pause>Pause</button>
           <button type="button" data-quick-mute>Mute</button>
         </div>
@@ -206,16 +202,11 @@ export class UIOverlay {
     this.soloSection = this.query<HTMLDivElement>("[data-solo-section]");
     this.soloValue = this.query("[data-solo-value]");
     this.soloFill = this.query<HTMLDivElement>("[data-solo-fill]");
-    this.hudButton = this.query<HTMLButtonElement>("[data-hud-button]");
     this.quickPauseButton = this.query<HTMLButtonElement>("[data-quick-pause]");
     this.quickMuteButton = this.query<HTMLButtonElement>("[data-quick-mute]");
 
     this.query<HTMLButtonElement>("[data-start-button]").addEventListener("click", () => {
       this.callbacks.onStart();
-    });
-
-    this.hudButton.addEventListener("click", () => {
-      this.callbacks.onHudToggle();
     });
 
     this.quickPauseButton.addEventListener("click", () => {

@@ -685,7 +685,7 @@ export class World {
     ) => void,
     onObjectRemoved?: (object: MusicalObject) => void,
   ): void {
-    const substeps = Math.max(1, Math.min(5, Math.ceil(deltaTime / (1 / 120))));
+    const substeps = Math.max(1, Math.min(8, Math.ceil(deltaTime / (1 / 240))));
     const stepDeltaTime = deltaTime / substeps;
 
     for (const pulse of this.pulses) {

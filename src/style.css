@@ -811,6 +811,7 @@ input {
   inset: 0;
   z-index: 10;
   touch-action: none;
+  pointer-events: none;
 }
 
 .session-chip-group {
@@ -818,6 +819,7 @@ input {
   top: calc(20px + env(safe-area-inset-top));
   right: calc(20px + env(safe-area-inset-right));
   justify-content: flex-end;
+  pointer-events: auto;
 }
 
 .session-now-playing {
@@ -829,6 +831,7 @@ input {
   display: flex;
   gap: 14px;
   align-items: flex-end;
+  pointer-events: none;
 }
 
 .session-now-playing-copy {
@@ -886,6 +889,7 @@ input {
     calc(24px + env(safe-area-inset-left));
   z-index: 14;
   overflow: auto;
+  pointer-events: auto;
 }
 
 .end-screen-backdrop {
