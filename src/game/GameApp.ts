@@ -431,9 +431,12 @@ export class GameApp {
     this.touchPlayerTargetX = this.pointerEventToWorldX(event);
     this.playerX = this.world.clampPlayerX(this.touchPlayerTargetX);
     this.world.setPlayerX(this.playerX);
-    const captureTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : this.canvas;
-    if (captureTarget.hasPointerCapture?.(event.pointerId) === false) {
-      captureTarget.setPointerCapture?.(event.pointerId);
+    try {
+      if (this.canvas.hasPointerCapture?.(event.pointerId) === false) {
+        this.canvas.setPointerCapture?.(event.pointerId);
+      }
+    } catch {
+      // Some mobile browsers are inconsistent here; move tracking still falls back to window listeners.
     }
     event.preventDefault();
   };
@@ -452,6 +455,13 @@ export class GameApp {
       return;
     }
 
+    try {
+      if (this.canvas.hasPointerCapture?.(event.pointerId)) {
+        this.canvas.releasePointerCapture?.(event.pointerId);
+      }
+    } catch {
+      // no-op
+    }
     this.touchPlayerTargetX = null;
     this.activeTouchPointerId = null;
   };

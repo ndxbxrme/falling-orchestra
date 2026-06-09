@@ -2023,8 +2023,7 @@ export class World {
   }
 
   private getResponsivePlayerWidth(): number {
-    const arenaWidth = this.bounds.right - this.bounds.left;
-    return clamp(arenaWidth * 0.2, 1.85, GAME_CONFIG.playerWidth);
+    return GAME_CONFIG.playerWidth;
   }
 
   private getResponsiveObjectScale(): number {
