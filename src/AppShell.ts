@@ -68,6 +68,7 @@ export class AppShell {
   private gameShell: HTMLDivElement;
   private canvas: HTMLCanvasElement;
   private gameUiRoot: HTMLDivElement;
+  private sessionUiRoot: HTMLDivElement;
   private libraryRoot: HTMLDivElement;
   private game?: GameAppType;
   private route: LibraryRoute = { view: "home" };
@@ -88,6 +89,7 @@ export class AppShell {
         <div class="game-shell hidden">
           <canvas class="game-canvas" aria-label="Falling Orchestra playfield"></canvas>
           <div class="game-ui-root"></div>
+          <div class="session-ui-root"></div>
         </div>
         <div class="library-root"></div>
       </div>
@@ -97,9 +99,10 @@ export class AppShell {
     const gameShell = this.root.querySelector<HTMLDivElement>(".game-shell");
     const canvas = this.root.querySelector<HTMLCanvasElement>(".game-canvas");
     const gameUiRoot = this.root.querySelector<HTMLDivElement>(".game-ui-root");
+    const sessionUiRoot = this.root.querySelector<HTMLDivElement>(".session-ui-root");
     const libraryRoot = this.root.querySelector<HTMLDivElement>(".library-root");
 
-    if (!appShell || !gameShell || !canvas || !gameUiRoot || !libraryRoot) {
+    if (!appShell || !gameShell || !canvas || !gameUiRoot || !sessionUiRoot || !libraryRoot) {
       throw new Error("App shell elements were not created");
     }
 
@@ -107,6 +110,7 @@ export class AppShell {
     this.gameShell = gameShell;
     this.canvas = canvas;
     this.gameUiRoot = gameUiRoot;
+    this.sessionUiRoot = sessionUiRoot;
     this.libraryRoot = libraryRoot;
     this.libraryState = loadLibraryState();
 
@@ -240,11 +244,14 @@ export class AppShell {
   private render(): void {
     this.appShell.classList.toggle("playing", Boolean(this.session));
     if (this.session) {
+      this.libraryRoot.classList.add("hidden");
       this.renderSessionChrome();
       return;
     }
 
     this.gameShell.classList.add("hidden");
+    this.sessionUiRoot.innerHTML = "";
+    this.libraryRoot.classList.remove("hidden");
     this.renderLibraryView();
   }
 
@@ -522,7 +529,7 @@ export class AppShell {
         : null;
 
     this.gameShell.classList.remove("hidden");
-    this.libraryRoot.innerHTML = `
+    this.sessionUiRoot.innerHTML = `
       <div class="session-chrome">
         <div class="session-chip-group">
           <button type="button" class="library-chip" data-action="back-to-library">Library</button>
@@ -717,6 +724,7 @@ export class AppShell {
     this.game = undefined;
     this.gameShell.classList.add("hidden");
     this.gameUiRoot.innerHTML = "";
+    this.sessionUiRoot.innerHTML = "";
   }
 
   private clearPendingAdvance(): void {
