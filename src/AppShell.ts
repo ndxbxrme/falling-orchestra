@@ -528,6 +528,7 @@ export class AppShell {
         ? `${this.session.queueIndex + 1} / ${this.session.playQueueSongIds.length}`
         : null;
 
+    this.libraryRoot.classList.add("hidden");
     this.gameShell.classList.remove("hidden");
     this.sessionUiRoot.innerHTML = `
       <div class="session-chrome">
