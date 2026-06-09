@@ -64,6 +64,7 @@ interface PreviewSession {
 }
 
 export class AppShell {
+  private appShell: HTMLDivElement;
   private gameShell: HTMLDivElement;
   private canvas: HTMLCanvasElement;
   private gameUiRoot: HTMLDivElement;
@@ -92,15 +93,17 @@ export class AppShell {
       </div>
     `;
 
+    const appShell = this.root.querySelector<HTMLDivElement>(".app-shell");
     const gameShell = this.root.querySelector<HTMLDivElement>(".game-shell");
     const canvas = this.root.querySelector<HTMLCanvasElement>(".game-canvas");
     const gameUiRoot = this.root.querySelector<HTMLDivElement>(".game-ui-root");
     const libraryRoot = this.root.querySelector<HTMLDivElement>(".library-root");
 
-    if (!gameShell || !canvas || !gameUiRoot || !libraryRoot) {
+    if (!appShell || !gameShell || !canvas || !gameUiRoot || !libraryRoot) {
       throw new Error("App shell elements were not created");
     }
 
+    this.appShell = appShell;
     this.gameShell = gameShell;
     this.canvas = canvas;
     this.gameUiRoot = gameUiRoot;
@@ -235,6 +238,7 @@ export class AppShell {
   };
 
   private render(): void {
+    this.appShell.classList.toggle("playing", Boolean(this.session));
     if (this.session) {
       this.renderSessionChrome();
       return;

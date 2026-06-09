@@ -556,6 +556,9 @@ export class World {
 
     this.playerMesh.position.x = this.playerX;
     this.playerMesh.position.y = y - 0.08;
+    this.playerMesh.scaling.x = this.playerWidth / GAME_CONFIG.playerWidth;
+    this.playerMesh.scaling.y = 1;
+    this.playerMesh.scaling.z = 1;
   }
 
   setCameraBeatPulse(pulse: number, grooveIntensity: number): void {

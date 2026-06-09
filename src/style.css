@@ -362,6 +362,12 @@ input {
   overscroll-behavior: contain;
 }
 
+.app-shell.playing .library-root {
+  overflow: hidden;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
 .session-chrome {
   user-select: none;
   -webkit-user-select: none;
