@@ -151,6 +151,35 @@ theme: {
 }
 ```
 
+### Album Cover Optimization
+
+Album covers are imported directly by the library and end-screen UI, so oversized source art will hurt mobile boot and scrolling.
+
+Use the destructive optimizer to convert packaged album art to `cover.webp`, resize it, and rewrite each album manifest import:
+
+```bash
+npm run optimize:cover-art
+```
+
+Useful flags:
+
+- `--dry-run`: show what would be converted without touching files
+- `--album-id <id>`: limit the run to one or more albums
+- `--max-size <px>`: clamp the longest edge, default `1280`
+- `--quality <0-100>`: WebP quality, default `82`
+
+Example:
+
+```bash
+npm run optimize:cover-art -- --album-id sector-seven_artificial-heat --max-size 1024
+```
+
+Notes:
+
+- this script is intentionally destructive and will delete the previous cover source after creating `cover.webp`
+- keep your original artwork elsewhere if you want a master copy
+- `ffmpeg` must be available on your machine
+
 ### Song Hydration
 
 Once a song package exists and real loop files have been copied into its `audio/` folder, you can hydrate `config.ts` from the clips.

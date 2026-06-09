@@ -24,8 +24,8 @@ const DEFAULT_BPM = 120;
 const INITIAL_TRANSPORT_LEAD = 0.35;
 const MIN_SCHEDULE_LOOKAHEAD = 0.012;
 const TRANSPORT_LOOKAHEAD = 0.16;
-const MAX_ACTIVE_IMPACT_VOICES = 24;
-const MAX_ACTIVE_MEGA_VOICES = 6;
+const MAX_ACTIVE_IMPACT_VOICES = 36;
+const MAX_ACTIVE_MEGA_VOICES = 8;
 const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
   voices: {
     bell: {
@@ -802,7 +802,7 @@ export class MusicSystem {
       return false;
     }
 
-    if (activeCount >= Math.floor(MAX_ACTIVE_IMPACT_VOICES * 0.75) && gain < 0.28) {
+    if (activeCount >= Math.floor(MAX_ACTIVE_IMPACT_VOICES * 0.85) && gain < 0.2) {
       return false;
     }
 

@@ -59,6 +59,7 @@ export class GameApp {
   private spawner = new Spawner();
   private input: InputController;
   private overlay: UIOverlay;
+  private interactionRoot: HTMLDivElement;
   private playerX = 0;
   private sessionPhase: GameSessionPhase = "idle";
   private paused = false;
@@ -129,6 +130,7 @@ export class GameApp {
   ) {
     this.songConfig = options.songConfig;
     this.onSongCompleted = options.onSongCompleted;
+    this.interactionRoot = overlayRoot;
     this.grooveLevels = [...new Set(
       this.songConfig.grooveLevels
         .map((grooveLevel) => grooveLevel.level)
@@ -250,10 +252,11 @@ export class GameApp {
       },
     });
 
-    this.canvas.addEventListener("pointerdown", this.handleCanvasPointerDown);
-    this.canvas.addEventListener("pointermove", this.handleCanvasPointerMove);
-    this.canvas.addEventListener("pointerup", this.handleCanvasPointerUp);
-    this.canvas.addEventListener("pointercancel", this.handleCanvasPointerUp);
+    this.canvas.addEventListener("pointerdown", this.handleGameplayPointerDown);
+    this.interactionRoot.addEventListener("pointerdown", this.handleGameplayPointerDown);
+    window.addEventListener("pointermove", this.handleGameplayPointerMove, { passive: false });
+    window.addEventListener("pointerup", this.handleGameplayPointerUp);
+    window.addEventListener("pointercancel", this.handleGameplayPointerUp);
     window.addEventListener("resize", this.handleResize);
   }
 
@@ -297,10 +300,11 @@ export class GameApp {
   }
 
   dispose(): void {
-    this.canvas.removeEventListener("pointerdown", this.handleCanvasPointerDown);
-    this.canvas.removeEventListener("pointermove", this.handleCanvasPointerMove);
-    this.canvas.removeEventListener("pointerup", this.handleCanvasPointerUp);
-    this.canvas.removeEventListener("pointercancel", this.handleCanvasPointerUp);
+    this.canvas.removeEventListener("pointerdown", this.handleGameplayPointerDown);
+    this.interactionRoot.removeEventListener("pointerdown", this.handleGameplayPointerDown);
+    window.removeEventListener("pointermove", this.handleGameplayPointerMove);
+    window.removeEventListener("pointerup", this.handleGameplayPointerUp);
+    window.removeEventListener("pointercancel", this.handleGameplayPointerUp);
     window.removeEventListener("resize", this.handleResize);
     this.input.dispose();
     this.music.dispose();
@@ -421,10 +425,10 @@ export class GameApp {
     }
   }
 
-  private handleCanvasPointerDown = (event: PointerEvent): void => {
+  private handleGameplayPointerDown = (event: PointerEvent): void => {
     void this.unlockAudio();
 
-    if (!this.isDirectTouchPointer(event)) {
+    if (!this.isDirectTouchPointer(event) || !this.canStartTouchDrag(event)) {
       return;
     }
 
@@ -432,11 +436,14 @@ export class GameApp {
     this.touchPlayerTargetX = this.pointerEventToWorldX(event);
     this.playerX = this.world.clampPlayerX(this.touchPlayerTargetX);
     this.world.setPlayerX(this.playerX);
-    this.canvas.setPointerCapture(event.pointerId);
+    const captureTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : this.canvas;
+    if (captureTarget.hasPointerCapture?.(event.pointerId) === false) {
+      captureTarget.setPointerCapture?.(event.pointerId);
+    }
     event.preventDefault();
   };
 
-  private handleCanvasPointerMove = (event: PointerEvent): void => {
+  private handleGameplayPointerMove = (event: PointerEvent): void => {
     if (event.pointerId !== this.activeTouchPointerId || !this.isDirectTouchPointer(event)) {
       return;
     }
@@ -445,17 +452,13 @@ export class GameApp {
     event.preventDefault();
   };
 
-  private handleCanvasPointerUp = (event: PointerEvent): void => {
+  private handleGameplayPointerUp = (event: PointerEvent): void => {
     if (event.pointerId !== this.activeTouchPointerId) {
       return;
     }
 
     this.touchPlayerTargetX = null;
     this.activeTouchPointerId = null;
-
-    if (this.canvas.hasPointerCapture(event.pointerId)) {
-      this.canvas.releasePointerCapture(event.pointerId);
-    }
   };
 
   private handleResize = (): void => {
@@ -464,6 +467,21 @@ export class GameApp {
 
   private isDirectTouchPointer(event: PointerEvent): boolean {
     return event.pointerType === "touch" || event.pointerType === "pen";
+  }
+
+  private canStartTouchDrag(event: PointerEvent): boolean {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, select, textarea, a, [data-no-touch-drag]")) {
+      return false;
+    }
+
+    const rect = this.interactionRoot.getBoundingClientRect();
+    if (event.clientY < rect.top || event.clientY > rect.bottom) {
+      return false;
+    }
+
+    const dragStartThreshold = rect.top + rect.height * 0.35;
+    return event.clientY >= dragStartThreshold;
   }
 
   private pointerEventToWorldX(event: PointerEvent): number {

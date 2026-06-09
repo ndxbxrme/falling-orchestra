@@ -1,5 +1,5 @@
 import type { AlbumManifest } from "../../schema";
-import sectorSevenFurnaceTransmissionCover from "./cover.png";
+import sectorSevenFurnaceTransmissionCover from "./cover.webp";
 
 export const SECTOR_SEVEN_FURNACE_TRANSMISSION_ALBUM: AlbumManifest = {
   id: "sector-seven_furnace-transmission",

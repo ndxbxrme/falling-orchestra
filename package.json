@@ -12,7 +12,8 @@
     "validate:content": "python3 scripts/validate_content.py",
     "scaffold:content": "python3 scripts/scaffold_content.py",
     "scaffold:backdrop": "python3 scripts/scaffold_content.py backdrop",
-    "hydrate:song": "python3 scripts/hydrate_song_config.py"
+    "hydrate:song": "python3 scripts/hydrate_song_config.py",
+    "optimize:cover-art": "python3 scripts/optimize_album_art.py"
   },
   "dependencies": {
     "@babylonjs/core": "^8.13.1"

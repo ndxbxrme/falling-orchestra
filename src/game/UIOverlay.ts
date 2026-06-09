@@ -176,6 +176,7 @@ export class UIOverlay {
             <span class="eyebrow">Audio Unlock</span>
             <h1>Start the Prototype</h1>
             <p>Web Audio needs a gesture before it can play. Press the button below, then use <strong>A / D</strong> or drag across the playfield to shape the falling lines.</p>
+            <p>On phones: touch almost anywhere in the lower screen and drag to move the paddle.</p>
             <p>Best first move: switch the mode if you want a different mood, then let the rain build until the arena starts to answer back.</p>
             <div class="button-row">
               <button type="button" data-start-button>Wake Audio and Play</button>

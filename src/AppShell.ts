@@ -769,12 +769,19 @@ export class AppShell {
   private renderLibraryActions(options: { includeFavorites?: boolean } = {}): string {
     const includeFavorites = options.includeFavorites ?? true;
     const previewAutoplayLabel = this.libraryState.previewAutoplay ? "Preview Auto On" : "Preview Auto Off";
+    const previewStatusLabel =
+      this.previewSession?.state === "loading"
+        ? "Cueing Preview"
+        : this.previewSession?.state === "playing"
+          ? "Preview Playing"
+          : null;
 
     return `
       <div class="library-actions">
         <button type="button" class="library-chip" data-action="open-home">Home</button>
         ${includeFavorites ? `<button type="button" class="library-chip" data-action="open-favorites">Favorites</button>` : ""}
         <button type="button" class="library-chip${this.libraryState.previewAutoplay ? " active" : ""}" data-action="toggle-preview-autoplay">${previewAutoplayLabel}</button>
+        ${previewStatusLabel ? `<span class="library-chip status">${previewStatusLabel}</span>` : ""}
         ${
           this.previewSession
             ? `<button type="button" class="library-chip active" data-action="stop-preview">Stop Preview</button>`
