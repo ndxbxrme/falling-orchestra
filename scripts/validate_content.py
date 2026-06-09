@@ -59,6 +59,10 @@ def extract_config_asset_refs(text: str) -> list[str]:
     return re.findall(r'assetUrl\("([^"]+)"\)', text)
 
 
+def extract_groove_level_count(text: str) -> int:
+    return len(re.findall(r"\blevel:\s*\d+", text))
+
+
 def directory_has_files(root: Path) -> bool:
     return any(path.is_file() for path in root.rglob("*"))
 
@@ -203,6 +207,13 @@ def validate_song(
     config_song_id = extract_string_field(config_text, "id")
     if not config_song_id:
         result.error(f"{config_file}: missing SongConfig id")
+
+    groove_level_count = extract_groove_level_count(config_text)
+    if len(audio_files) > 2 and groove_level_count <= 1:
+        result.warn(
+            f"{config_file}: only {groove_level_count} groove level declared despite {len(audio_files)} audio clips; "
+            "song may need rehydrating"
+        )
 
     for asset_name in extract_config_asset_refs(config_text):
         asset_path = audio_dir / asset_name

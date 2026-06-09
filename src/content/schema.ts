@@ -1,5 +1,6 @@
 import type { SongConfig } from "../game/songConfig";
 import type { SpawnPattern } from "../game/types";
+import type { BackdropParamValue } from "./backdrops/schema";
 
 export type ContentAvailability = "included" | "locked" | "hidden";
 export type PlaylistKind = "system" | "user";
@@ -38,7 +39,7 @@ export interface AlbumThemeManifest {
   background: string;
   panel: string;
   backdropPreset: string;
-  backdropParams?: Record<string, string | number | boolean>;
+  backdropParams?: Record<string, BackdropParamValue>;
 }
 
 export interface AlbumManifest {
@@ -71,7 +72,7 @@ export interface SongManifest {
   coverArt?: string;
   recommendedWeight: number;
   availability: ContentAvailability;
-  config: SongConfig;
+  loadConfig: () => Promise<SongConfig>;
 }
 
 export interface Playlist {
@@ -89,6 +90,7 @@ export interface LibraryState {
   recentAlbumIds: string[];
   ownedAlbumIds: string[];
   lastPlayedSongId: string | null;
+  previewAutoplay: boolean;
 }
 
 export interface RecommendedSection {

@@ -1,4 +1,3 @@
-import { SONG5_CONFIG } from "./config";
 import type { SongManifest } from "../../../../schema";
 
 export const CONSTANT_ENOPLE_SONG: SongManifest = {
@@ -13,5 +12,5 @@ export const CONSTANT_ENOPLE_SONG: SongManifest = {
   moodTags: ["heavy", "driving"],
   recommendedWeight: 0.76,
   availability: "included",
-  config: SONG5_CONFIG,
+  loadConfig: async () => (await import("./config")).SONG5_CONFIG,
 };

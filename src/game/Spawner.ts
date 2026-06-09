@@ -302,7 +302,7 @@ export class Spawner {
     }
 
     if (this.soloModeActive) {
-      if (activeSoloObjects > 0 || this.specialBurst) {
+      if (activeSoloObjects >= GAME_CONFIG.soloModeMaxActiveBalls || this.specialBurst) {
         return;
       }
 

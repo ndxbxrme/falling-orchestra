@@ -1,4 +1,3 @@
-import { GameApp } from "./game/GameApp";
 import {
   getAlbumById,
   getAlbumSongs,
@@ -8,6 +7,7 @@ import {
   getRecommendedSection,
   getSongById,
   getVisibleAlbums,
+  getVisibleSongs,
 } from "./content/library";
 import {
   createDefaultLibraryState,
@@ -15,7 +15,12 @@ import {
   registerRecentPlayback,
   saveLibraryState,
   toggleFavoriteSong,
+  togglePreviewAutoplay,
 } from "./content/libraryState";
+import type { SongConfig } from "./game/songConfig";
+import type { GameApp as GameAppType } from "./game/GameApp";
+import type { GameCompletionStats } from "./game/types";
+import { SongPreviewPlayer } from "./SongPreviewPlayer";
 import type { Album, LibraryRoute, LibraryState, SongEntry } from "./content/types";
 
 const escapeHtml = (value: string): string =>
@@ -28,7 +33,7 @@ const escapeHtml = (value: string): string =>
 
 interface PlayingSession {
   songId: string;
-  albumQueue?: string[];
+  playQueueSongIds?: string[];
   queueIndex?: number;
 }
 
@@ -39,17 +44,42 @@ interface TrackTransitionOverlay {
   accent: string;
 }
 
+interface EndScreenOverlay {
+  kicker: string;
+  title: string;
+  subtitle: string;
+  praise: string;
+  accent: string;
+  stats: Array<{ label: string; value: string }>;
+}
+
+const DEV_BOOT_TO_END_SCREEN =
+  import.meta.env.DEV && new URLSearchParams(window.location.search).get("debugEndScreen") === "1";
+
+interface PreviewSession {
+  songId: string;
+  playQueueSongIds: string[];
+  queueIndex: number;
+  state: "loading" | "playing";
+}
+
 export class AppShell {
   private gameShell: HTMLDivElement;
   private canvas: HTMLCanvasElement;
   private gameUiRoot: HTMLDivElement;
   private libraryRoot: HTMLDivElement;
-  private game?: GameApp;
+  private game?: GameAppType;
   private route: LibraryRoute = { view: "home" };
   private libraryState: LibraryState = createDefaultLibraryState();
   private session: PlayingSession | null = null;
   private pendingAdvanceTimeout?: number;
   private trackTransitionOverlay: TrackTransitionOverlay | null = null;
+  private endScreenOverlay: EndScreenOverlay | null = null;
+  private lastCompletionStats: GameCompletionStats | null = null;
+  private gameAppModulePromise?: Promise<typeof import("./game/GameApp")>;
+  private songConfigPromises = new Map<string, Promise<SongConfig>>();
+  private previewPlayer = new SongPreviewPlayer();
+  private previewSession: PreviewSession | null = null;
 
   constructor(private root: HTMLDivElement) {
     this.root.innerHTML = `
@@ -85,6 +115,7 @@ export class AppShell {
     this.clearPendingAdvance();
     this.libraryRoot.removeEventListener("click", this.handleLibraryClick);
     this.disposeGame();
+    this.previewPlayer.dispose();
   }
 
   private handleLibraryClick = async (event: Event): Promise<void> => {
@@ -152,6 +183,54 @@ export class AppShell {
 
     if (action === "back-to-library") {
       this.stopPlayback();
+      return;
+    }
+
+    if (action === "toggle-preview-autoplay") {
+      this.libraryState = togglePreviewAutoplay(this.libraryState);
+      saveLibraryState(this.libraryState);
+      this.render();
+      return;
+    }
+
+    if (action === "stop-preview") {
+      this.stopPreview();
+      return;
+    }
+
+    if (action === "preview-song") {
+      const songId = actionElement.dataset.songId;
+      if (!songId) {
+        return;
+      }
+      await this.startSongPreview(songId);
+      return;
+    }
+
+    if (action === "replay-song") {
+      if (!this.session) {
+        return;
+      }
+      await this.startSong(this.session.songId, this.session.playQueueSongIds, this.session.queueIndex);
+      return;
+    }
+
+    if (action === "play-next-queued-song") {
+      const nextSongId = this.getNextTrackSongId(this.session);
+      if (!nextSongId) {
+        return;
+      }
+      const nextSession = this.getNextTrackSession(this.session, nextSongId);
+      await this.startSong(nextSongId, nextSession.playQueueSongIds, nextSession.queueIndex);
+      return;
+    }
+
+    if (action === "play-random-song") {
+      const randomSongId = this.getRandomSongId(this.session?.songId);
+      if (!randomSongId) {
+        return;
+      }
+      await this.startSong(randomSongId);
     }
   };
 
@@ -202,12 +281,9 @@ export class AppShell {
         <header class="library-header">
           <div>
             <p class="library-kicker">Falling Orchestra</p>
-            <h1>Recommended First. Albums Ready.</h1>
+            <h1>Get The Balls Falling. Choose a Song.</h1>
           </div>
-          <div class="library-actions">
-            <button type="button" class="library-chip" data-action="open-home">Home</button>
-            <button type="button" class="library-chip" data-action="open-favorites">Favorites</button>
-          </div>
+          ${this.renderLibraryActions()}
         </header>
 
         ${
@@ -224,6 +300,7 @@ export class AppShell {
                   </div>
                   <div class="hero-actions">
                     <button type="button" class="play-button" data-action="play-song" data-song-id="${featuredSong.id}">Play Now</button>
+                    <button type="button" class="preview-icon-button hero-preview-button${this.previewSession?.songId === featuredSong.id ? " active" : ""}" data-action="preview-song" data-song-id="${featuredSong.id}" aria-label="Preview ${escapeHtml(featuredSong.title)}">♪</button>
                     <button type="button" class="library-chip" data-action="play-album" data-album-id="${featuredAlbum.id}">Play Album</button>
                     <button type="button" class="library-chip" data-action="open-album" data-album-id="${featuredAlbum.id}">Open Album</button>
                   </div>
@@ -275,10 +352,7 @@ export class AppShell {
             <h1>${escapeHtml(album.title)}</h1>
             <p class="library-subtitle">${escapeHtml(artist?.name ?? "Unknown Artist")}</p>
           </div>
-          <div class="library-actions">
-            <button type="button" class="library-chip" data-action="open-home">Home</button>
-            <button type="button" class="library-chip" data-action="open-favorites">Favorites</button>
-          </div>
+          ${this.renderLibraryActions()}
         </header>
 
         <section class="album-hero" style="--hero-accent:${album.theme.accent};--hero-panel:${album.theme.panel};">
@@ -322,9 +396,7 @@ export class AppShell {
             <p class="library-kicker">Collection</p>
             <h1>Favorites</h1>
           </div>
-          <div class="library-actions">
-            <button type="button" class="library-chip" data-action="open-home">Home</button>
-          </div>
+          ${this.renderLibraryActions({ includeFavorites: false })}
         </header>
         <section class="track-section">
           <div class="section-head">
@@ -360,14 +432,18 @@ export class AppShell {
   private renderCompactSongCard(song: SongEntry, emphasizeFavorite = false): string {
     const album = getAlbumById(song.albumId);
     const favorite = this.libraryState.favoritesSongIds.includes(song.id);
+    const previewing = this.previewSession?.songId === song.id;
 
     return `
-      <article class="compact-song-card">
+      <article class="compact-song-card${previewing ? " previewing" : ""}">
         <div class="compact-song-top">
           ${album ? this.renderSongArt(album, "compact-song-art") : ""}
-          <button type="button" class="card-favorite${favorite ? " active" : ""}" data-action="toggle-favorite" data-song-id="${song.id}">
-            ${favorite ? "★" : "☆"}
-          </button>
+          <div class="compact-song-controls">
+            <button type="button" class="preview-icon-button${previewing ? " active" : ""}" data-action="preview-song" data-song-id="${song.id}" aria-label="Preview ${escapeHtml(song.title)}">♪</button>
+            <button type="button" class="card-favorite${favorite ? " active" : ""}" data-action="toggle-favorite" data-song-id="${song.id}">
+              ${favorite ? "★" : "☆"}
+            </button>
+          </div>
         </div>
         <div class="compact-song-copy">
           <span class="compact-track-no">${String(song.trackNumber).padStart(2, "0")}</span>
@@ -409,9 +485,10 @@ export class AppShell {
   private renderSongRow(song: SongEntry): string {
     const album = getAlbumById(song.albumId);
     const favorite = this.libraryState.favoritesSongIds.includes(song.id);
+    const previewing = this.previewSession?.songId === song.id;
 
     return `
-      <article class="song-row">
+      <article class="song-row${previewing ? " previewing" : ""}">
         <div class="song-row-meta">
           ${album ? this.renderSongArt(album, "song-row-art") : ""}
           <span class="song-row-index">${String(song.trackNumber).padStart(2, "0")}</span>
@@ -421,6 +498,7 @@ export class AppShell {
           </div>
         </div>
         <div class="song-row-actions">
+          <button type="button" class="preview-icon-button${previewing ? " active" : ""}" data-action="preview-song" data-song-id="${song.id}" aria-label="Preview ${escapeHtml(song.title)}">♪</button>
           <button type="button" class="card-favorite${favorite ? " active" : ""}" data-action="toggle-favorite" data-song-id="${song.id}">
             ${favorite ? "★" : "☆"}
           </button>
@@ -435,8 +513,8 @@ export class AppShell {
     const album = song ? getAlbumById(song.albumId) : undefined;
     const favorite = song ? this.libraryState.favoritesSongIds.includes(song.id) : false;
     const queueLabel =
-      this.session?.albumQueue && this.session.queueIndex !== undefined
-        ? `${this.session.queueIndex + 1} / ${this.session.albumQueue.length}`
+      this.session?.playQueueSongIds && this.session.queueIndex !== undefined
+        ? `${this.session.queueIndex + 1} / ${this.session.playQueueSongIds.length}`
         : null;
 
     this.gameShell.classList.remove("hidden");
@@ -477,6 +555,7 @@ export class AppShell {
             `
             : ""
         }
+        ${this.endScreenOverlay ? this.renderEndScreenOverlay(song) : ""}
       </div>
     `;
   }
@@ -490,7 +569,7 @@ export class AppShell {
     await this.startSong(songs[0].id, songs.map((song) => song.id), 0);
   }
 
-  private async startSong(songId: string, albumQueue?: string[], queueIndex?: number): Promise<void> {
+  private async startSong(songId: string, playQueueSongIds?: string[], queueIndex?: number): Promise<void> {
     const song = getSongById(songId);
     if (!song) {
       return;
@@ -498,71 +577,135 @@ export class AppShell {
 
     this.clearPendingAdvance();
     this.disposeGame();
+    this.stopPreview();
     this.libraryState = registerRecentPlayback(this.libraryState, song.id, song.albumId);
     saveLibraryState(this.libraryState);
-    this.trackTransitionOverlay = null;
-    this.session = { songId, albumQueue, queueIndex };
+    this.endScreenOverlay = null;
+    this.lastCompletionStats = null;
+    this.trackTransitionOverlay = {
+      kicker: "Cueing Track",
+      title: song.title,
+      subtitle: getAlbumById(song.albumId)?.title ?? "",
+      accent: getAlbumById(song.albumId)?.theme.accent ?? "#7ee9ef",
+    };
+    const album = getAlbumById(song.albumId);
+    this.session = { songId, playQueueSongIds, queueIndex };
     this.renderSessionChrome();
 
+    const [songConfig, gameAppModule] = await Promise.all([
+      this.getOrLoadSongConfig(song.id),
+      this.getGameAppModule(),
+    ]);
+    const { GameApp } = gameAppModule;
+
     this.game = new GameApp(this.canvas, this.gameUiRoot, {
-      songConfig: song.config,
-      onSongCompleted: () => {
-        this.handleSongCompleted();
+      songConfig,
+      backdropPresetId: album?.theme.backdropPreset,
+      backdropParams: album?.theme.backdropParams,
+      onSongCompleted: (stats) => {
+        this.handleSongCompleted(stats);
       },
     });
     await this.game.beginFromSelection();
     this.game.start();
+    this.trackTransitionOverlay = null;
+    this.preloadNextQueuedSongConfig(this.session);
+    if (DEV_BOOT_TO_END_SCREEN) {
+      this.showEndScreenOverlay();
+    }
+    this.renderSessionChrome();
   }
 
-  private handleSongCompleted(): void {
-    if (!this.session?.albumQueue || this.session.queueIndex === undefined) {
-      this.clearPendingAdvance();
-      this.pendingAdvanceTimeout = window.setTimeout(() => {
-        this.stopPlayback();
-      }, 1100);
-      return;
-    }
-
-    const nextIndex = this.session.queueIndex + 1;
-    if (nextIndex >= this.session.albumQueue.length) {
-      const currentSong = getSongById(this.session.songId);
-      const currentAlbum = currentSong ? getAlbumById(currentSong.albumId) : undefined;
-      this.trackTransitionOverlay = {
-        kicker: "Album Complete",
-        title: currentAlbum?.title ?? "Set Complete",
-        subtitle: "Returning to library",
-        accent: currentAlbum?.theme.accent ?? "#7ee9ef",
-      };
-      this.renderSessionChrome();
-      this.clearPendingAdvance();
-      this.pendingAdvanceTimeout = window.setTimeout(() => {
-        this.stopPlayback();
-      }, 1400);
-      return;
-    }
-
-    const nextSongId = this.session.albumQueue[nextIndex];
-    const nextSong = getSongById(nextSongId);
-    const nextAlbum = nextSong ? getAlbumById(nextSong.albumId) : undefined;
-    this.trackTransitionOverlay = {
-      kicker: "Next Transmission",
-      title: nextSong?.title ?? "Loading",
-      subtitle: nextAlbum?.title ?? "",
-      accent: nextAlbum?.theme.accent ?? "#7ee9ef",
-    };
-    this.renderSessionChrome();
-    this.clearPendingAdvance();
-    this.pendingAdvanceTimeout = window.setTimeout(() => {
-      void this.startSong(nextSongId, this.session!.albumQueue, nextIndex);
-    }, 1400);
+  private handleSongCompleted(stats: GameCompletionStats): void {
+    this.lastCompletionStats = stats;
+    this.showEndScreenOverlay();
   }
 
   private stopPlayback(): void {
     this.clearPendingAdvance();
     this.disposeGame();
     this.trackTransitionOverlay = null;
+    this.endScreenOverlay = null;
     this.session = null;
     this.render();
+  }
+
+  private async startSongPreview(songId: string): Promise<void> {
+    const song = getSongById(songId);
+    if (!song) {
+      return;
+    }
+
+    const albumSongs = getAlbumSongs(song.albumId);
+    const queueIndex = albumSongs.findIndex((entry) => entry.id === songId);
+    if (queueIndex < 0) {
+      return;
+    }
+
+    if (this.previewSession?.songId === songId && this.previewPlayer.isActive()) {
+      this.stopPreview();
+      return;
+    }
+
+    this.previewPlayer.stop();
+    this.disposeGame();
+    this.session = null;
+    this.trackTransitionOverlay = null;
+    this.endScreenOverlay = null;
+    this.route = { view: "album", albumId: song.albumId };
+    this.previewSession = {
+      songId,
+      playQueueSongIds: albumSongs.map((entry) => entry.id),
+      queueIndex,
+      state: "loading",
+    };
+    this.render();
+
+    const songConfig = await this.getOrLoadSongConfig(songId);
+    if (this.previewSession?.songId !== songId) {
+      return;
+    }
+
+    this.previewSession = {
+      songId,
+      playQueueSongIds: this.previewSession.playQueueSongIds,
+      queueIndex,
+      state: "playing",
+    };
+    this.render();
+
+    await this.previewPlayer.playSong(songConfig, {
+      onEnded: () => {
+        void this.handlePreviewEnded(songId);
+      },
+    });
+  }
+
+  private async handlePreviewEnded(songId: string): Promise<void> {
+    if (!this.previewSession || this.previewSession.songId !== songId) {
+      return;
+    }
+
+    if (!this.libraryState.previewAutoplay) {
+      this.stopPreview();
+      return;
+    }
+
+    const nextSongId = this.previewSession.playQueueSongIds[this.previewSession.queueIndex + 1];
+    if (!nextSongId) {
+      this.stopPreview();
+      return;
+    }
+
+    await this.startSongPreview(nextSongId);
+  }
+
+  private stopPreview(): void {
+    this.previewPlayer.stop();
+    this.previewSession = null;
+    if (!this.session) {
+      this.render();
+    }
   }
 
   private disposeGame(): void {
@@ -577,6 +720,211 @@ export class AppShell {
       window.clearTimeout(this.pendingAdvanceTimeout);
       this.pendingAdvanceTimeout = undefined;
     }
+  }
+
+  private getGameAppModule(): Promise<typeof import("./game/GameApp")> {
+    if (!this.gameAppModulePromise) {
+      this.gameAppModulePromise = import("./game/GameApp");
+    }
+    return this.gameAppModulePromise;
+  }
+
+  private getOrLoadSongConfig(songId: string): Promise<SongConfig> {
+    const existing = this.songConfigPromises.get(songId);
+    if (existing) {
+      return existing;
+    }
+
+    const song = getSongById(songId);
+    if (!song) {
+      return Promise.reject(new Error(`Song not found: ${songId}`));
+    }
+
+    const loadPromise = song.loadConfig();
+    this.songConfigPromises.set(songId, loadPromise);
+    return loadPromise;
+  }
+
+  private async preloadSongById(songId: string): Promise<void> {
+    try {
+      await this.getOrLoadSongConfig(songId);
+    } catch (error) {
+      console.warn("Failed to preload song config", songId, error);
+    }
+  }
+
+  private preloadNextQueuedSongConfig(session: PlayingSession | null): void {
+    if (!session?.playQueueSongIds || session.queueIndex === undefined) {
+      return;
+    }
+
+    const nextSongId = session.playQueueSongIds[session.queueIndex + 1];
+    if (!nextSongId) {
+      return;
+    }
+
+    void this.preloadSongById(nextSongId);
+  }
+
+  private renderLibraryActions(options: { includeFavorites?: boolean } = {}): string {
+    const includeFavorites = options.includeFavorites ?? true;
+    const previewAutoplayLabel = this.libraryState.previewAutoplay ? "Preview Auto On" : "Preview Auto Off";
+
+    return `
+      <div class="library-actions">
+        <button type="button" class="library-chip" data-action="open-home">Home</button>
+        ${includeFavorites ? `<button type="button" class="library-chip" data-action="open-favorites">Favorites</button>` : ""}
+        <button type="button" class="library-chip${this.libraryState.previewAutoplay ? " active" : ""}" data-action="toggle-preview-autoplay">${previewAutoplayLabel}</button>
+        ${
+          this.previewSession
+            ? `<button type="button" class="library-chip active" data-action="stop-preview">Stop Preview</button>`
+            : ""
+        }
+      </div>
+    `;
+  }
+
+  private showEndScreenOverlay(): void {
+    const session = this.session;
+    if (!session) {
+      return;
+    }
+
+    const song = getSongById(session.songId);
+    const album = song ? getAlbumById(song.albumId) : undefined;
+    const artist = album ? getArtistById(album.artistId) : undefined;
+    const nextSongId = this.getNextTrackSongId(session);
+    const queueLabel =
+      session.playQueueSongIds && session.queueIndex !== undefined
+        ? `${session.queueIndex + 1}/${session.playQueueSongIds.length}`
+        : "Single";
+
+    this.game?.setPaused(true);
+    this.trackTransitionOverlay = null;
+    this.endScreenOverlay = {
+      kicker: nextSongId ? "Transmission Complete" : "Set Complete",
+      title: song?.title ?? "Track Complete",
+      subtitle: [album?.title, artist?.name].filter(Boolean).join(" · "),
+      praise: nextSongId ? "Locked in. Ready for the next one." : "Locked in. Step back or run it again.",
+      accent: album?.theme.accent ?? "#7ee9ef",
+      stats: [
+        { label: "Special Catches", value: `${this.lastCompletionStats?.specialCatches ?? 0}` },
+        { label: "Longest Solo", value: `${this.lastCompletionStats?.longestSolo ?? 0} catches` },
+        { label: "Queue Position", value: queueLabel },
+      ],
+    };
+    this.renderSessionChrome();
+  }
+
+  private renderEndScreenOverlay(song: SongEntry | undefined): string {
+    const album = song ? getAlbumById(song.albumId) : undefined;
+    const nextSongId = this.getNextTrackSongId(this.session);
+    const overlay = this.endScreenOverlay;
+    if (!overlay) {
+      return "";
+    }
+    const coverStyle = album?.coverArt
+      ? `--end-cover-image:url('${album.coverArt.replace(/'/g, "\\'")}');`
+      : "";
+
+    return `
+      <div class="end-screen-overlay" style="--end-accent:${overlay.accent};${coverStyle}">
+        <div class="end-screen-backdrop"></div>
+        <div class="end-screen-panel">
+          <span class="section-label">${escapeHtml(overlay.kicker)}</span>
+          <div class="end-screen-topline">
+            <div class="end-screen-copy">
+              <h2>${escapeHtml(overlay.title)}</h2>
+              <p>${escapeHtml(overlay.subtitle)}</p>
+              <p class="end-screen-praise">${escapeHtml(overlay.praise)}</p>
+            </div>
+          </div>
+          <div class="end-screen-stats">
+            ${overlay.stats
+              .map(
+                (stat) => `
+                  <div class="end-screen-stat">
+                    <span>${escapeHtml(stat.label)}</span>
+                    <strong>${escapeHtml(stat.value)}</strong>
+                  </div>
+                `,
+              )
+              .join("")}
+          </div>
+          <div class="end-screen-actions">
+            <button type="button" class="end-screen-action" data-action="replay-song">Replay</button>
+            ${nextSongId ? `<button type="button" class="end-screen-action" data-action="play-next-queued-song">Next Track</button>` : ""}
+            <button type="button" class="end-screen-action" data-action="play-random-song">Random</button>
+            <button type="button" class="end-screen-action" data-action="back-to-library">Back To Library</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private getNextQueuedSongId(session: PlayingSession | null): string | null {
+    if (!session?.playQueueSongIds || session.queueIndex === undefined) {
+      return null;
+    }
+
+    return session.playQueueSongIds[session.queueIndex + 1] ?? null;
+  }
+
+  private getNextTrackSongId(session: PlayingSession | null): string | null {
+    if (!session) {
+      return null;
+    }
+
+    const queuedSongId = this.getNextQueuedSongId(session);
+    if (queuedSongId) {
+      return queuedSongId;
+    }
+
+    const currentSong = getSongById(session.songId);
+    if (!currentSong) {
+      return null;
+    }
+
+    const albumSongs = getAlbumSongs(currentSong.albumId);
+    if (albumSongs.length === 0) {
+      return null;
+    }
+
+    const currentIndex = albumSongs.findIndex((song) => song.id === currentSong.id);
+    if (currentIndex < 0) {
+      return albumSongs[0]?.id ?? null;
+    }
+
+    return albumSongs[(currentIndex + 1) % albumSongs.length]?.id ?? null;
+  }
+
+  private getNextTrackSession(session: PlayingSession | null, nextSongId: string): PlayingSession {
+    if (session?.playQueueSongIds && session.queueIndex !== undefined) {
+      const nextQueueIndex = session.playQueueSongIds.indexOf(nextSongId);
+      return {
+        songId: nextSongId,
+        playQueueSongIds: session.playQueueSongIds,
+        queueIndex: nextQueueIndex >= 0 ? nextQueueIndex : session.queueIndex + 1,
+      };
+    }
+
+    const nextSong = getSongById(nextSongId);
+    const albumSongs = nextSong ? getAlbumSongs(nextSong.albumId) : [];
+    const nextQueueIndex = albumSongs.findIndex((song) => song.id === nextSongId);
+    return {
+      songId: nextSongId,
+      playQueueSongIds: albumSongs.map((song) => song.id),
+      queueIndex: nextQueueIndex >= 0 ? nextQueueIndex : 0,
+    };
+  }
+
+  private getRandomSongId(excludeSongId?: string): string | null {
+    const candidates = getVisibleSongs().filter((song) => song.availability === "included" && song.id !== excludeSongId);
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    return candidates[Math.floor(Math.random() * candidates.length)]?.id ?? null;
   }
 
   private renderSongArt(album: Album, className: string): string {

@@ -1,4 +1,3 @@
-import { SONG8_CONFIG } from "./config";
 import type { SongManifest } from "../../../../schema";
 
 export const HAMTRACK_SONG: SongManifest = {
@@ -13,5 +12,5 @@ export const HAMTRACK_SONG: SongManifest = {
   moodTags: ["heavy", "dark", "driving"],
   recommendedWeight: 0.8,
   availability: "included",
-  config: SONG8_CONFIG,
+  loadConfig: async () => (await import("./config")).SONG8_CONFIG,
 };

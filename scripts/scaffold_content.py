@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     album_parser.add_argument("--text", default="#eaf7ff")
     album_parser.add_argument("--background", default="#081522")
     album_parser.add_argument("--panel", default="#101b29")
-    album_parser.add_argument("--backdrop-preset", default="sheffield-club")
+    album_parser.add_argument("--backdrop-preset", default="brutalist-club")
     album_parser.add_argument(
         "--backdrop-param",
         action="append",
@@ -112,6 +112,27 @@ def parse_args() -> argparse.Namespace:
         "--placeholder-prefix",
         default="01",
         help='Prefix for placeholder loop files, e.g. "01" creates 01i.ogg / 01m.ogg',
+    )
+
+    backdrop_parser = subparsers.add_parser("backdrop", help="Create a new backdrop preset module")
+    backdrop_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Print planned changes without writing files",
+    )
+    backdrop_parser.add_argument("--name", required=True, help="Backdrop display name")
+    backdrop_parser.add_argument("--backdrop-id", help="Backdrop id; defaults from name")
+    backdrop_parser.add_argument(
+        "--description",
+        default="A scaffolded backdrop module ready for further visual design.",
+        help="Backdrop description",
+    )
+    backdrop_parser.add_argument(
+        "--performance-tier",
+        default="medium",
+        choices=["low", "medium", "high", "extreme"],
+        help="Initial performance tier",
     )
 
     return parser.parse_args()
@@ -331,6 +352,56 @@ def sync_albums_index(content_root: Path, dry_run: bool) -> None:
     write_file(albums_root / "index.ts", body, dry_run)
 
 
+def sync_backdrops_registry(content_root: Path, dry_run: bool) -> None:
+    backdrop_root = content_root / "backdrops"
+    preset_root = backdrop_root / "presets"
+    entries: list[tuple[str, str]] = []
+
+    for preset_file in sorted(preset_root.glob("*.ts")):
+        if preset_file.name == "__init__.ts":
+            continue
+        text = read_text(preset_file)
+        const_match = re.search(r"export const (\w+):\s*BackdropModule\s*=", text)
+        if not const_match:
+            continue
+        entries.append((preset_file.stem, const_match.group(1)))
+
+    imports = [
+        f'import {{ {const_name} }} from "./presets/{stem}";'
+        for stem, const_name in entries
+    ]
+    body = GENERATED_HEADER
+    if imports:
+        body += "\n".join(imports) + "\n"
+    body += 'import type { BackdropModule } from "./schema";\n\n'
+    body += "export const BACKDROP_MODULES: BackdropModule[] = [\n"
+    for _, exported_const in entries:
+        body += f"  {exported_const},\n"
+    body += "];\n\n"
+    body += "export const BACKDROP_MODULE_MAP = new Map(\n"
+    body += "  BACKDROP_MODULES.map((module) => [module.id, module] as const),\n"
+    body += ");\n\n"
+    body += "export const getBackdropModuleById = (backdropId: string): BackdropModule | undefined =>\n"
+    body += "  BACKDROP_MODULE_MAP.get(backdropId);\n"
+    write_file(backdrop_root / "registry.ts", body, dry_run)
+
+
+def sync_backdrops_index(content_root: Path, dry_run: bool) -> None:
+    backdrop_root = content_root / "backdrops"
+    preset_root = backdrop_root / "presets"
+    export_lines = [
+        f'export * from "./presets/{preset_file.stem}";'
+        for preset_file in sorted(preset_root.glob("*.ts"))
+        if preset_file.name != "__init__.ts"
+    ]
+    body = GENERATED_HEADER
+    body += 'export * from "./schema";\n'
+    body += 'export * from "./registry";\n'
+    if export_lines:
+        body += "\n" + "\n".join(export_lines) + "\n"
+    write_file(backdrop_root / "index.ts", body, dry_run)
+
+
 def scaffold_artist(content_root: Path, artist_id: str, artist_name: str | None, dry_run: bool) -> None:
     artist_dir = content_root / "artists" / artist_id
     artist_file = artist_dir / "artist.ts"
@@ -444,7 +515,7 @@ def scaffold_song(args: argparse.Namespace, content_root: Path) -> None:
     manifest_const = const_name(song_slug, "_SONG")
     song_body = GENERATED_HEADER
     song_body += 'import type { SongManifest } from "../../../../schema";\n'
-    song_body += f'import {{ {config_const} }} from "./config";\n\n'
+    song_body += "\n"
     song_body += f"export const {manifest_const}: SongManifest = {{\n"
     song_body += f'  id: "{song_id}",\n'
     song_body += f'  slug: "{song_slug}",\n'
@@ -457,7 +528,7 @@ def scaffold_song(args: argparse.Namespace, content_root: Path) -> None:
     song_body += f"  moodTags: {format_string_array(mood_tags, 4)},\n"
     song_body += f"  recommendedWeight: {args.recommended_weight},\n"
     song_body += f'  availability: "{args.availability}",\n'
-    song_body += f"  config: {config_const},\n"
+    song_body += f'  loadConfig: async () => (await import("./config")).{config_const},\n'
     song_body += "};\n"
     write_file(song_dir / "song.ts", song_body, args.dry_run)
 
@@ -472,6 +543,32 @@ def scaffold_song(args: argparse.Namespace, content_root: Path) -> None:
         )
 
 
+def scaffold_backdrop(args: argparse.Namespace, content_root: Path) -> None:
+    backdrop_id = args.backdrop_id or slugify(args.name)
+    presets_root = content_root / "backdrops" / "presets"
+    template_file = content_root / "backdrops" / "templates" / "backdrop-template.ts"
+    backdrop_file = presets_root / f"{backdrop_id}.ts"
+    if backdrop_file.exists():
+        raise SystemExit(f"Backdrop already exists: {backdrop_file}")
+    if not template_file.exists():
+        raise SystemExit(f"Backdrop template not found: {template_file}")
+
+    template_text = read_text(template_file)
+    export_const = const_name(backdrop_id, "_BACKDROP")
+    body = template_text
+    body = body.replace("BACKDROP_TEMPLATE", export_const)
+    body = body.replace('id: "template-name"', f'id: "{backdrop_id}"')
+    body = body.replace('label: "Template Name"', f'label: "{args.name}"')
+    body = body.replace(
+        "Replace this with the visual idea. This file is meant to be handed to an LLM or edited by hand. Keep all meshes/materials created inside create(), update only your own objects, dispose everything in dispose(), and if you derive any width/height/scale/anchor values from bounds make sure resize() recomputes and stores them.",
+        args.description,
+    )
+    body = body.replace('performanceTier: "medium"', f'performanceTier: "{args.performance_tier}"')
+    write_file(backdrop_file, body, args.dry_run)
+    sync_backdrops_registry(content_root, args.dry_run)
+    sync_backdrops_index(content_root, args.dry_run)
+
+
 def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[1]
@@ -481,6 +578,8 @@ def main() -> None:
         scaffold_album(args, content_root)
     elif args.command == "song":
         scaffold_song(args, content_root)
+    elif args.command == "backdrop":
+        scaffold_backdrop(args, content_root)
     else:
         raise SystemExit(f"Unknown command: {args.command}")
 

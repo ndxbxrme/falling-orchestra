@@ -39,6 +39,12 @@ class Transport:
 
 
 @dataclass
+class SongIdentity:
+    key: str
+    slug: str
+
+
+@dataclass
 class Suggestion:
     root: str
     mode: str
@@ -99,7 +105,8 @@ def main() -> None:
 
     for target in targets:
         transport = resolve_transport(target, args.bpm, args.beats_per_bar)
-        song_name = target.parent.name
+        song_identity = resolve_song_identity(target)
+        song_name = song_identity.slug
         report_lines.extend(
             [
                 f"## {song_name}",
@@ -116,7 +123,7 @@ def main() -> None:
             song_results.append(result)
             report_lines.extend(format_clip_markdown(clip_path.name, result))
 
-        report_json["songs"][song_name] = {
+        report_json["songs"][song_identity.key] = {
             "transport": {"bpm": transport.bpm, "beatsPerBar": transport.beats_per_bar},
             "clips": song_results,
         }
@@ -126,10 +133,16 @@ def main() -> None:
     output_path.write_text("\n".join(report_lines), encoding="utf-8")
 
     json_path = output_path.with_suffix(".json")
-    json_path.write_text(json.dumps(report_json, indent=2), encoding="utf-8")
+    json_payload = json.dumps(report_json, indent=2)
+    json_path.write_text(json_payload, encoding="utf-8")
+
+    public_json_path = repo_root / "public" / "docs" / "harmony_suggestions.json"
+    public_json_path.parent.mkdir(parents=True, exist_ok=True)
+    public_json_path.write_text(json_payload, encoding="utf-8")
 
     print(f"Wrote {output_path.relative_to(repo_root)}")
     print(f"Wrote {json_path.relative_to(repo_root)}")
+    print(f"Wrote {public_json_path.relative_to(repo_root)}")
 
 
 def resolve_targets(repo_root: Path, content_root: Path, raw_targets: Iterable[str]) -> list[Path]:
@@ -161,6 +174,22 @@ def resolve_transport(
             return Transport(float(bpm_match.group(1)), int(beats_match.group(1)))
 
     return Transport(fallback_bpm or 120.0, fallback_beats_per_bar)
+
+
+def resolve_song_identity(song_dir: Path) -> SongIdentity:
+    song_dir_name = song_dir.parent.name
+    song_manifest_path = song_dir.parent / "song.ts"
+    if song_manifest_path.exists():
+        text = song_manifest_path.read_text(encoding="utf-8")
+        id_match = re.search(r'id:\s*"([^"]+)"', text)
+        slug_match = re.search(r'slug:\s*"([^"]+)"', text)
+        if id_match:
+            return SongIdentity(
+                key=id_match.group(1),
+                slug=slug_match.group(1) if slug_match else song_dir_name,
+            )
+
+    return SongIdentity(key=song_dir_name, slug=song_dir_name)
 
 
 def analyze_clip(path: Path, transport: Transport, top_n: int) -> dict[str, object]:

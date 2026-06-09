@@ -31,13 +31,14 @@ class InferenceResult:
     beats_per_bar: int
     bars_per_loop: int
     groove_levels: list[dict[str, object]]
+    warnings: list[str]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Hydrate a packaged song config from its audio clips.")
+    parser = argparse.ArgumentParser(description="Hydrate packaged song config(s) from audio clips.")
     parser.add_argument("--content-root", default="src/content", help="Content root. Defaults to src/content")
-    parser.add_argument("--album-id", help="Album id when targeting a packaged song")
-    parser.add_argument("--song-slug", help="Song slug when targeting a packaged song")
+    parser.add_argument("--album-id", help="Album id when targeting packaged song(s)")
+    parser.add_argument("--song-slug", help="Song slug when targeting a single packaged song")
     parser.add_argument("--song-dir", help="Direct path to a packaged song directory")
     parser.add_argument("--beats-per-bar", type=int, default=4, help="Beats per bar. Defaults to 4")
     parser.add_argument("--bpm-min", type=int, default=60, help="Minimum BPM to consider. Defaults to 60")
@@ -53,24 +54,50 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_song_context(args: argparse.Namespace) -> SongContext:
+def resolve_song_contexts(args: argparse.Namespace) -> list[SongContext]:
     repo_root = Path(__file__).resolve().parents[1]
     content_root = (repo_root / args.content_root).resolve()
 
     if args.song_dir:
-        song_dir = Path(args.song_dir).resolve()
+        song_dirs = [Path(args.song_dir).resolve()]
     else:
-        if not args.album_id or not args.song_slug:
-            raise SystemExit("Pass either --song-dir or both --album-id and --song-slug.")
-        song_dir = content_root / "albums" / args.album_id / "songs" / args.song_slug
+        if not args.album_id:
+            raise SystemExit("Pass either --song-dir, or --album-id with an optional --song-slug.")
+        album_songs_dir = content_root / "albums" / args.album_id / "songs"
+        if not album_songs_dir.exists():
+            raise SystemExit(f"Missing songs directory: {album_songs_dir}")
+        if args.song_slug:
+            song_dirs = [album_songs_dir / args.song_slug]
+        else:
+            song_dirs = sorted(path for path in album_songs_dir.iterdir() if path.is_dir())
+            if not song_dirs:
+                raise SystemExit(f"No song directories found in {album_songs_dir}")
 
-    config_file = song_dir / "config.ts"
-    audio_dir = song_dir / "audio"
-    if not config_file.exists():
-        raise SystemExit(f"Missing config.ts: {config_file}")
-    if not audio_dir.exists():
-        raise SystemExit(f"Missing audio directory: {audio_dir}")
-    return SongContext(song_dir=song_dir, config_file=config_file, audio_dir=audio_dir)
+    contexts: list[SongContext] = []
+    warnings: list[str] = []
+    strict_targeting = bool(args.song_dir or args.song_slug)
+    for song_dir in song_dirs:
+        config_file = song_dir / "config.ts"
+        audio_dir = song_dir / "audio"
+        if not config_file.exists():
+            message = f"Missing config.ts: {config_file}"
+            if strict_targeting:
+                raise SystemExit(message)
+            warnings.append(message)
+            continue
+        if not audio_dir.exists():
+            message = f"Missing audio directory: {audio_dir}"
+            if strict_targeting:
+                raise SystemExit(message)
+            warnings.append(message)
+            continue
+        contexts.append(SongContext(song_dir=song_dir, config_file=config_file, audio_dir=audio_dir))
+
+    for warning in warnings:
+        print(f"Warning: {warning}")
+    if not contexts:
+        raise SystemExit("No hydratable songs found.")
+    return contexts
 
 
 def probe_duration_seconds(audio_file: Path) -> float:
@@ -203,6 +230,7 @@ def infer_timing(
     bars_per_loop = mode_int(main_bars, 4)
 
     groove_levels: list[dict[str, object]] = []
+    warnings: list[str] = []
     grouped: dict[int, list[ClipInfo]] = {}
     for clip in clips:
         grouped.setdefault(clip.key, []).append(clip)
@@ -239,11 +267,38 @@ def infer_timing(
         if "intro" in last and "main" not in last:
             last["completesSong"] = True
 
+    if len(keys) > 1:
+        final_key = keys[-1]
+        for key in keys:
+            group = grouped[key]
+            intro = next((clip for clip in group if clip.kind == "intro"), None)
+            main = next((clip for clip in group if clip.kind == "main"), None)
+            finale = next((clip for clip in group if clip.kind == "finale"), None)
+            is_final_group = key == final_key and finale is not None or (key == final_key and intro is not None and main is None)
+
+            if is_final_group:
+                if intro is None:
+                    warnings.append(
+                        f"final groove group {key} is missing its ending intro/finale clip"
+                    )
+                continue
+
+            if intro is None or main is None:
+                missing_parts: list[str] = []
+                if intro is None:
+                    missing_parts.append("intro")
+                if main is None:
+                    missing_parts.append("main")
+                warnings.append(
+                    f"groove group {key} is missing {', '.join(missing_parts)} clip(s)"
+                )
+
     return InferenceResult(
         bpm=best_bpm,
         beats_per_bar=beats_per_bar,
         bars_per_loop=bars_per_loop,
         groove_levels=groove_levels,
+        warnings=warnings,
     )
 
 
@@ -400,27 +455,47 @@ def hydrate_config(context: SongContext, inference: InferenceResult, dry_run: bo
 
 def main() -> None:
     args = parse_args()
-    context = resolve_song_context(args)
-    clips = collect_clips(context.audio_dir)
-    existing_text = context.config_file.read_text(encoding="utf-8")
-    existing_bars_per_loop = extract_number_field(existing_text, "barsPerLoop") or 4
-    existing_bpm = extract_float_field(existing_text, "bpm") or 120.0
-    preferred_main_bars = [existing_bars_per_loop]
-    preferred_main_bars.extend(
-        value for value in parse_preferred_main_bars(args.preferred_main_bars) if value != existing_bars_per_loop
-    )
-    inference = infer_timing(
-        clips,
-        beats_per_bar=args.beats_per_bar,
-        bpm_min=args.bpm_min,
-        bpm_max=args.bpm_max,
-        bpm_step=args.bpm_step,
-        max_bars=args.max_bars,
-        preferred_main_bars=preferred_main_bars,
-        preferred_bpm=existing_bpm,
-    )
-    print_summary(context, inference, clips)
-    hydrate_config(context, inference, dry_run=args.dry_run)
+    contexts = resolve_song_contexts(args)
+    hydrated_count = 0
+    pooled_warnings: list[tuple[Path, str]] = []
+
+    for index, context in enumerate(contexts):
+        if index > 0:
+            print()
+        clips = collect_clips(context.audio_dir)
+        existing_text = context.config_file.read_text(encoding="utf-8")
+        existing_bars_per_loop = extract_number_field(existing_text, "barsPerLoop") or 4
+        existing_bpm = extract_float_field(existing_text, "bpm") or 120.0
+        preferred_main_bars = [existing_bars_per_loop]
+        preferred_main_bars.extend(
+            value for value in parse_preferred_main_bars(args.preferred_main_bars) if value != existing_bars_per_loop
+        )
+        inference = infer_timing(
+            clips,
+            beats_per_bar=args.beats_per_bar,
+            bpm_min=args.bpm_min,
+            bpm_max=args.bpm_max,
+            bpm_step=args.bpm_step,
+            max_bars=args.max_bars,
+            preferred_main_bars=preferred_main_bars,
+            preferred_bpm=existing_bpm,
+        )
+        print_summary(context, inference, clips)
+        for warning in inference.warnings:
+            pooled_warnings.append((context.song_dir, warning))
+        hydrate_config(context, inference, dry_run=args.dry_run)
+        hydrated_count += 1
+
+    if len(contexts) > 1:
+        print()
+        action = "Would hydrate" if args.dry_run else "Hydrated"
+        print(f"{action} {hydrated_count} songs.")
+
+    if pooled_warnings:
+        print()
+        print("Warnings:")
+        for song_dir, warning in pooled_warnings:
+            print(f"  - {song_dir.name}: {warning}")
 
 
 if __name__ == "__main__":

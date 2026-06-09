@@ -84,6 +84,7 @@ export const GAME_CONFIG = {
   soloTriggerCooldownMax: 18,
   soloModeSpawnIntervalMin: 0.72,
   soloModeSpawnIntervalMax: 1.18,
+  soloModeMaxActiveBalls: 3,
   soloMaxConsecutiveMisses: 2,
 } as const;
 

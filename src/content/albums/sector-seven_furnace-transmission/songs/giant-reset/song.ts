@@ -1,4 +1,3 @@
-import { SONG1_CONFIG } from "./config";
 import type { SongManifest } from "../../../../schema";
 
 export const GIANT_RESET_SONG: SongManifest = {
@@ -13,5 +12,5 @@ export const GIANT_RESET_SONG: SongManifest = {
   moodTags: ["dark", "driving"],
   recommendedWeight: 0.66,
   availability: "included",
-  config: SONG1_CONFIG,
+  loadConfig: async () => (await import("./config")).SONG1_CONFIG,
 };

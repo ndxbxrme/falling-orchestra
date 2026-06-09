@@ -1,4 +1,3 @@
-import { SONG9_CONFIG } from "./config";
 import type { SongManifest } from "../../../../schema";
 
 export const BURRIED_SONG: SongManifest = {
@@ -13,5 +12,5 @@ export const BURRIED_SONG: SongManifest = {
   moodTags: ["ambient", "broken", "dark"],
   recommendedWeight: 0.78,
   availability: "included",
-  config: SONG9_CONFIG,
+  loadConfig: async () => (await import("./config")).SONG9_CONFIG,
 };

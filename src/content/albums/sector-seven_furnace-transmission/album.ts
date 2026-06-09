@@ -16,7 +16,7 @@ export const SECTOR_SEVEN_FURNACE_TRANSMISSION_ALBUM: AlbumManifest = {
     text: "#eaf7ff",
     background: "#081522",
     panel: "#101b29",
-    backdropPreset: "sheffield-club",
+    backdropPreset: "brutalist-club",
     backdropParams: {
       haze: 0.7,
       laserColorA: "#57ffe0",

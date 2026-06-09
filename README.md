@@ -108,12 +108,20 @@ npm run scaffold:content -- song \
   --track-number 1
 ```
 
+Backdrop presets can also be scaffolded:
+
+```bash
+npm run scaffold:backdrop -- --name "Radar Shrine"
+```
+
 Notes:
 
 - `--dry-run` works before or after the subcommand.
 - scaffolded songs default to `hidden`
 - scaffolded songs create zero-byte placeholder `01i.ogg` / `01m.ogg` files
 - replace placeholder audio before making a song visible
+- scaffolded backdrops are created from `src/content/backdrops/templates/backdrop-template.ts`
+- scaffolded backdrops are auto-registered in `src/content/backdrops/registry.ts`
 
 Album scaffolding will:
 
@@ -128,9 +136,26 @@ Song scaffolding will:
 - set `recommendedSongId` if the album does not have one yet
 - regenerate song and album index files
 
+Backdrop scaffolding will:
+
+- create `src/content/backdrops/presets/<backdrop-id>.ts`
+- regenerate `src/content/backdrops/registry.ts`
+- regenerate `src/content/backdrops/index.ts`
+
+To use a backdrop in an album, set the album theme’s `backdropPreset` to the scaffolded backdrop id:
+
+```ts
+theme: {
+  // ...
+  backdropPreset: "radar-shrine",
+}
+```
+
 ### Song Hydration
 
-Once a song package exists and real loop files have been copied into its `audio/` folder, you can hydrate `config.ts` from the clips:
+Once a song package exists and real loop files have been copied into its `audio/` folder, you can hydrate `config.ts` from the clips.
+
+Single song:
 
 ```bash
 npm run hydrate:song -- \
@@ -138,10 +163,18 @@ npm run hydrate:song -- \
   --song-slug new-track
 ```
 
+Whole album:
+
+```bash
+npm run hydrate:song -- \
+  --album-id sector-seven_second-album
+```
+
 Useful flags:
 
 - `--dry-run`: print the inferred BPM / bar lengths without writing `config.ts`
-- `--song-dir`: target a song package directly instead of using `--album-id` + `--song-slug`
+- `--song-dir`: target a song package directly instead of using packaged album/song ids
+- omit `--song-slug` to hydrate every packaged song in the album
 - `--bpm-min`, `--bpm-max`, `--bpm-step`: tune the BPM search range
 
 The hydrator currently rewrites:
@@ -152,6 +185,27 @@ The hydrator currently rewrites:
 - `grooveLevels`
 
 It leaves `harmonyTimeline`, `impactPalette`, and other hand-authored config sections alone.
+
+### Harmony Defaults
+
+After running the harmony analyzer, you can stamp a first-pass default root/mode onto every song in an album:
+
+```bash
+npm run analyze:harmony
+npm run apply:harmony-defaults -- --album-id sector-seven_second-album
+```
+
+This tool:
+
+- reads `public/docs/harmony_suggestions.json`
+- picks the dominant analyzer suggestion per song
+- rewrites `harmonyTimeline` to a single span covering the song's full `harmonyCycleBars`
+- sets both `rootNote` and `mode`
+
+Useful flags:
+
+- `--dry-run`: print the inferred defaults without writing `config.ts`
+- `--suggestions-file`: point at a different harmony suggestions JSON file
 
 ### Validation
 

@@ -1,4 +1,3 @@
-import { SONG7_CONFIG } from "./config";
 import type { SongManifest } from "../../../../schema";
 
 export const JELLING_BAD_WORDS_SONG: SongManifest = {
@@ -13,5 +12,5 @@ export const JELLING_BAD_WORDS_SONG: SongManifest = {
   moodTags: ["hypnotic", "melodic"],
   recommendedWeight: 0.72,
   availability: "included",
-  config: SONG7_CONFIG,
+  loadConfig: async () => (await import("./config")).SONG7_CONFIG,
 };

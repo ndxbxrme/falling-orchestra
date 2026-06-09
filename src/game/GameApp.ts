@@ -1,4 +1,5 @@
 import { Vector2 } from "@babylonjs/core/Maths/math.vector";
+import type { BackdropParamValue } from "../content/backdrops";
 import { GAME_CONFIG } from "./config";
 import { InputController } from "./InputController";
 import { MusicSystem } from "./MusicSystem";
@@ -7,6 +8,7 @@ import { Spawner } from "./Spawner";
 import { UIOverlay } from "./UIOverlay";
 import { World } from "./World";
 import type {
+  GameCompletionStats,
   GameSessionPhase,
   MusicalObject,
   OverlayState,
@@ -27,9 +29,8 @@ const MEGA_COMBO_REWARD = 2;
 const LAUNCH_COUNTDOWN_STEP_MS = 620;
 const LAUNCH_COUNTDOWN_STEPS = 4;
 const GROOVE_LANDING_AFTERGLOW_MS = 520;
-const SOLO_DEBUG =
-  typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+const FIXED_SIMULATION_STEP = 1 / 60;
+const MAX_SIMULATION_STEPS_PER_FRAME = 4;
 
 interface FormationProgress {
   total: number;
@@ -46,7 +47,9 @@ interface SoloModeState {
 
 interface GameAppOptions {
   songConfig: SongConfig;
-  onSongCompleted?: () => void;
+  backdropPresetId?: string;
+  backdropParams?: Record<string, BackdropParamValue>;
+  onSongCompleted?: (stats: GameCompletionStats) => void;
 }
 
 export class GameApp {
@@ -72,19 +75,52 @@ export class GameApp {
   private megaComboCooldown = 0;
   private activeTouchPointerId: number | null = null;
   private touchPlayerTargetX: number | null = null;
-  private onSongCompleted?: () => void;
+  private onSongCompleted?: (stats: GameCompletionStats) => void;
   private launchCountdownEndsAt = 0;
   private smoothedFrameTimeMs = 16.7;
   private smoothedFps = 60;
+  private simulationAccumulator = 0;
   private transitionState: TransitionState = { kind: "none" };
   private grooveLandingEndsAt = 0;
   private grooveLandingLevel: number | null = null;
+  private activeFormationSummary = { caught: 0, required: 0, visible: false };
+  private overlayState: OverlayState = {
+    sessionPhase: "idle",
+    transitionState: { kind: "none" },
+    activeObjects: 0,
+    fps: 60,
+    frameTimeMs: 16.7,
+    rootNote: "C",
+    mode: "ionian",
+    liveMode: false,
+    hudVisible: false,
+    spawnInterval: GAME_CONFIG.spawnIntervalDefault,
+    spawnLiveInterval: GAME_CONFIG.spawnIntervalDefault,
+    spawnPattern: "rain",
+    grooveCharge: 0,
+    grooveTarget: GROOVE_TARGET,
+    grooveLevel: 1,
+    grooveLayerLabel: "Groove 1",
+    activeFormationCaught: 0,
+    activeFormationRequired: 0,
+    activeFormationVisible: false,
+    soloModeActive: false,
+    soloMissesRemaining: GAME_CONFIG.soloMaxConsecutiveMisses,
+    paused: false,
+    muted: false,
+    freezeSpawning: false,
+    debugLabels: false,
+    masterVolume: 0.72,
+  };
   private soloMode: SoloModeState = {
     active: false,
     consecutiveMisses: 0,
     maxConsecutiveMisses: GAME_CONFIG.soloMaxConsecutiveMisses,
   };
   private activeSoloBallIds = new Set<number>();
+  private specialCatchCount = 0;
+  private currentSoloCatchCount = 0;
+  private longestSoloCatchCount = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -93,8 +129,15 @@ export class GameApp {
   ) {
     this.songConfig = options.songConfig;
     this.onSongCompleted = options.onSongCompleted;
-    this.grooveLevels = this.songConfig.grooveLevels.map((grooveLevel) => grooveLevel.level);
-    this.world = new World(canvas);
+    this.grooveLevels = [...new Set(
+      this.songConfig.grooveLevels
+        .map((grooveLevel) => grooveLevel.level)
+        .filter((level): level is number => Number.isFinite(level)),
+    )].sort((a, b) => a - b);
+    this.world = new World(canvas, {
+      backdropPresetId: options.backdropPresetId,
+      backdropParams: options.backdropParams,
+    });
     this.music.loadSong(this.songConfig);
     this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
 
@@ -217,20 +260,40 @@ export class GameApp {
   start(): void {
     this.world.engine.runRenderLoop(() => {
       const now = performance.now();
-      const deltaTime = Math.min((now - this.lastFrameTime) / 1000, GAME_CONFIG.maxDeltaTime);
+      const rawFrameTimeMs = Math.max(0.1, now - this.lastFrameTime);
+      const deltaTime = Math.min(rawFrameTimeMs / 1000, GAME_CONFIG.maxDeltaTime);
       this.lastFrameTime = now;
-      const frameTimeMs = Math.max(0.1, deltaTime * 1000);
       const perfFollow = 0.12;
-      this.smoothedFrameTimeMs += (frameTimeMs - this.smoothedFrameTimeMs) * perfFollow;
-      this.smoothedFps += ((1000 / frameTimeMs) - this.smoothedFps) * perfFollow;
+      this.smoothedFrameTimeMs += (rawFrameTimeMs - this.smoothedFrameTimeMs) * perfFollow;
+      this.smoothedFps += ((1000 / rawFrameTimeMs) - this.smoothedFps) * perfFollow;
 
       if (!this.paused) {
-        this.tick(deltaTime);
+        this.simulationAccumulator = Math.min(
+          this.simulationAccumulator + deltaTime,
+          FIXED_SIMULATION_STEP * MAX_SIMULATION_STEPS_PER_FRAME,
+        );
+        let simulationSteps = 0;
+        while (
+          this.simulationAccumulator >= FIXED_SIMULATION_STEP &&
+          simulationSteps < MAX_SIMULATION_STEPS_PER_FRAME
+        ) {
+          this.tick(FIXED_SIMULATION_STEP);
+          this.simulationAccumulator -= FIXED_SIMULATION_STEP;
+          simulationSteps += 1;
+        }
+      } else {
+        this.simulationAccumulator = 0;
       }
 
       this.overlay.update(this.getOverlayState());
-      this.world.render();
+      this.world.render(this.paused ? 1 : this.simulationAccumulator / FIXED_SIMULATION_STEP);
     });
+  }
+
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    this.simulationAccumulator = 0;
+    this.music.setPaused(paused);
   }
 
   dispose(): void {
@@ -276,6 +339,7 @@ export class GameApp {
       }
     }
     this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
+    this.world.setBackdropGrooveState(this.music.currentGrooveLevel, this.songConfig.grooveLevels.length);
     this.world.setEndingState(endingState?.progress ?? 0, endingState?.intensity ?? 0);
     this.world.setTransitionState(this.transitionState);
     if (endingState && this.soloMode.active) {
@@ -425,23 +489,7 @@ export class GameApp {
         if (!wasCaught) {
           this.world.markSoloCaught(object.id);
         }
-        if (SOLO_DEBUG) {
-          console.debug("[SoloDebug] handleSoloCatch", {
-            objectId: object.id,
-            surface: surface.kind,
-            wasCaught,
-            impact,
-            normalizedX,
-          });
-        }
         this.handleSoloCatch(object, normalizedX, impact, x, y);
-      } else if (SOLO_DEBUG) {
-        console.debug("[SoloDebug] ignored solo impact", {
-          objectId: object.id,
-          surface: surface.kind,
-          active: this.activeSoloBallIds.has(object.id),
-          impact,
-        });
       }
       return;
     }
@@ -517,7 +565,7 @@ export class GameApp {
   }
 
   private togglePause(): void {
-    this.paused = !this.paused;
+    this.setPaused(!this.paused);
   }
 
   private toggleMute(): void {
@@ -549,6 +597,7 @@ export class GameApp {
   }
 
   private reset(): void {
+    this.simulationAccumulator = 0;
     this.endSoloMode(true);
     this.spawner.reset();
     this.world.reset();
@@ -563,6 +612,9 @@ export class GameApp {
     this.grooveLandingEndsAt = 0;
     this.grooveLandingLevel = null;
     this.activeSoloBallIds.clear();
+    this.specialCatchCount = 0;
+    this.currentSoloCatchCount = 0;
+    this.longestSoloCatchCount = 0;
     this.music.resetGroovePlayback();
     this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
   }
@@ -620,6 +672,7 @@ export class GameApp {
     const requiredCaught = this.getRequiredFormationCatches(progress.total);
 
     if (progress.touched.size >= requiredCaught) {
+      this.specialCatchCount += 1;
       this.awardGroove(1, "Groove +1", "#69f5d8", 118);
       this.spawner.queueMegaSpawn();
       this.overlay.showNoteLabel(
@@ -635,7 +688,8 @@ export class GameApp {
   }
 
   private awardGroove(amount: number, label: string, color: string, y: number): void {
-    this.grooveCharge = Math.min(GROOVE_TARGET, this.grooveCharge + amount);
+    const previousCharge = Number.isFinite(this.grooveCharge) ? this.grooveCharge : 0;
+    this.grooveCharge = clamp(previousCharge + amount, 0, GROOVE_TARGET);
     this.overlay.showNoteLabel(label, this.canvas.clientWidth * 0.5, y, color, "banner");
     this.syncGrooveUnlocks();
   }
@@ -691,6 +745,9 @@ export class GameApp {
       this.soloMode.consecutiveMisses = 0;
     }
 
+    this.currentSoloCatchCount += 1;
+    this.longestSoloCatchCount = Math.max(this.longestSoloCatchCount, this.currentSoloCatchCount);
+
     const played = this.music.triggerSoloNote({
       noteRange: object.noteRange,
       normalizedX,
@@ -719,13 +776,14 @@ export class GameApp {
   private startSoloMode(): void {
     this.soloMode.active = true;
     this.soloMode.consecutiveMisses = 0;
+    this.currentSoloCatchCount = 0;
     this.spawner.setSoloModeActive(true);
     this.overlay.showNoteLabel(
       "Solo Mode",
-      34,
+      this.canvas.clientWidth - 34,
       this.canvas.clientHeight - 210,
       "#ffcf97",
-      "callout",
+      "callout-right",
     );
   }
 
@@ -734,54 +792,56 @@ export class GameApp {
       return;
     }
 
+    this.longestSoloCatchCount = Math.max(this.longestSoloCatchCount, this.currentSoloCatchCount);
     this.soloMode.active = false;
     this.soloMode.consecutiveMisses = 0;
+    this.currentSoloCatchCount = 0;
     this.activeSoloBallIds.clear();
     this.spawner.setSoloModeActive(false);
     this.music.stopSoloVoice();
     if (!silent) {
       this.overlay.showNoteLabel(
-        "Phrase Lost",
-        34,
-        this.canvas.clientHeight - 210,
-        "#ffd2c3",
-        "callout",
+        "Solo Complete",
+        this.canvas.clientWidth * 0.5,
+        118,
+        "#ffd7b2",
+        "banner",
       );
     }
   }
 
   private getOverlayState(): OverlayState {
-    return {
-      sessionPhase: this.sessionPhase,
-      transitionState: this.transitionState,
-      activeObjects: this.world.getObjectCount(),
-      fps: this.smoothedFps,
-      frameTimeMs: this.smoothedFrameTimeMs,
-      rootNote: this.music.rootNote,
-      mode: this.music.mode,
-      liveMode: this.liveMode,
-      hudVisible: this.hudVisible,
-      spawnInterval: this.spawner.spawnInterval,
-      spawnLiveInterval: this.spawner.currentInterval,
-      spawnPattern: this.spawner.spawnPattern,
-      grooveCharge: this.grooveCharge,
-      grooveTarget: GROOVE_TARGET,
-      grooveLevel: this.music.currentGrooveLevel,
-      grooveLayerLabel: this.getGrooveLayerLabel(),
-      activeFormationCaught: this.getActiveFormationSummary().caught,
-      activeFormationRequired: this.getActiveFormationSummary().required,
-      activeFormationVisible: this.getActiveFormationSummary().visible,
-      soloModeActive: this.soloMode.active,
-      soloMissesRemaining: Math.max(
-        0,
-        this.soloMode.maxConsecutiveMisses - this.soloMode.consecutiveMisses,
-      ),
-      paused: this.paused,
-      muted: this.muted,
-      freezeSpawning: this.freezeSpawning,
-      debugLabels: this.debugLabels,
-      masterVolume: this.music.volume,
-    };
+    const formationSummary = this.getActiveFormationSummary();
+    this.overlayState.sessionPhase = this.sessionPhase;
+    this.overlayState.transitionState = this.transitionState;
+    this.overlayState.activeObjects = this.world.getObjectCount();
+    this.overlayState.fps = this.smoothedFps;
+    this.overlayState.frameTimeMs = this.smoothedFrameTimeMs;
+    this.overlayState.rootNote = this.music.rootNote;
+    this.overlayState.mode = this.music.mode;
+    this.overlayState.liveMode = this.liveMode;
+    this.overlayState.hudVisible = this.hudVisible;
+    this.overlayState.spawnInterval = this.spawner.spawnInterval;
+    this.overlayState.spawnLiveInterval = this.spawner.currentInterval;
+    this.overlayState.spawnPattern = this.spawner.spawnPattern;
+    this.overlayState.grooveCharge = this.grooveCharge;
+    this.overlayState.grooveTarget = GROOVE_TARGET;
+    this.overlayState.grooveLevel = this.music.currentGrooveLevel;
+    this.overlayState.grooveLayerLabel = this.getGrooveLayerLabel();
+    this.overlayState.activeFormationCaught = formationSummary.caught;
+    this.overlayState.activeFormationRequired = formationSummary.required;
+    this.overlayState.activeFormationVisible = formationSummary.visible;
+    this.overlayState.soloModeActive = this.soloMode.active;
+    this.overlayState.soloMissesRemaining = Math.max(
+      0,
+      this.soloMode.maxConsecutiveMisses - this.soloMode.consecutiveMisses,
+    );
+    this.overlayState.paused = this.paused;
+    this.overlayState.muted = this.muted;
+    this.overlayState.freezeSpawning = this.freezeSpawning;
+    this.overlayState.debugLabels = this.debugLabels;
+    this.overlayState.masterVolume = this.music.volume;
+    return this.overlayState;
   }
 
   private hasActiveSpecialFormation(): boolean {
@@ -792,6 +852,13 @@ export class GameApp {
     }
 
     return false;
+  }
+
+  private getCompletionStats(): GameCompletionStats {
+    return {
+      specialCatches: this.specialCatchCount,
+      longestSolo: Math.max(this.longestSoloCatchCount, this.currentSoloCatchCount),
+    };
   }
 
   private getActiveFormationSummary(): { caught: number; required: number; visible: boolean } {
@@ -812,11 +879,10 @@ export class GameApp {
       }
     }
 
-    return {
-      caught: bestCaught,
-      required: bestRequired,
-      visible: bestRequired > 0,
-    };
+    this.activeFormationSummary.caught = bestCaught;
+    this.activeFormationSummary.required = bestRequired;
+    this.activeFormationSummary.visible = bestRequired > 0;
+    return this.activeFormationSummary;
   }
 
   private getGrooveLayerLabel(): string {
@@ -857,9 +923,17 @@ export class GameApp {
       return 1;
     }
 
+    if (!Number.isFinite(charge)) {
+      return this.grooveLevels[0] ?? 1;
+    }
+
     const normalizedCharge = clamp(charge / GROOVE_TARGET, 0, 1);
-    const grooveIndex = Math.round(normalizedCharge * (this.grooveLevels.length - 1));
-    return this.grooveLevels[grooveIndex];
+    const grooveIndex = clamp(
+      Math.round(normalizedCharge * (this.grooveLevels.length - 1)),
+      0,
+      this.grooveLevels.length - 1,
+    );
+    return this.grooveLevels[grooveIndex] ?? this.grooveLevels[this.grooveLevels.length - 1] ?? 1;
   }
 
   private syncSongCompletionState(): void {
@@ -871,7 +945,7 @@ export class GameApp {
     this.setSessionPhase("completed");
     this.overlay.showNoteLabel("Locked In", this.canvas.clientWidth * 0.5, 94, "#ffca6e", "banner");
     this.overlay.showNoteLabel("Track Complete", this.canvas.clientWidth * 0.5, 94, "#eaf7ff", "banner");
-    this.onSongCompleted?.();
+    this.onSongCompleted?.(this.getCompletionStats());
   }
 
   private syncTransitionState(

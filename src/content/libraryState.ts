@@ -9,6 +9,7 @@ export const createDefaultLibraryState = (): LibraryState => ({
   recentAlbumIds: [],
   ownedAlbumIds: [],
   lastPlayedSongId: null,
+  previewAutoplay: true,
 });
 
 export const loadLibraryState = (): LibraryState => {
@@ -51,4 +52,9 @@ export const registerRecentPlayback = (
   recentSongIds: [songId, ...state.recentSongIds.filter((id) => id !== songId)].slice(0, MAX_RECENTS),
   recentAlbumIds: [albumId, ...state.recentAlbumIds.filter((id) => id !== albumId)].slice(0, MAX_RECENTS),
   lastPlayedSongId: songId,
+});
+
+export const togglePreviewAutoplay = (state: LibraryState): LibraryState => ({
+  ...state,
+  previewAutoplay: !state.previewAutoplay,
 });

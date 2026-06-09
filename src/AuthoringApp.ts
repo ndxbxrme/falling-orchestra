@@ -1,5 +1,6 @@
 import { MODE_LABELS, ROOT_NOTES, SCALE_MODES } from "./game/config";
 import { ScaleQuantizer } from "./game/ScaleQuantizer";
+import type { SongConfig } from "./game/songConfig";
 import type { HarmonySpanConfig } from "./game/songConfig";
 import type { RootNoteName, ScaleModeName } from "./game/types";
 import { MUSIC_LIBRARY } from "./content/library";
@@ -99,6 +100,14 @@ const clipFilenameFromSrc = (src: string): string => {
   } catch {
     return src.split("/").filter(Boolean).pop() ?? src;
   }
+};
+
+const normalizeClipFilename = (filename: string): string => {
+  const match = filename.match(/^(.*?)-[A-Za-z0-9_-]{6,}(\.[^.]+)$/);
+  if (!match) {
+    return filename;
+  }
+  return `${match[1]}${match[2]}`;
 };
 
 const expandHarmonyTimeline = (
@@ -346,9 +355,7 @@ class AuthoringAuditionEngine {
     const context = this.ensureContext();
     const modeIntervals = SCALE_MODES[harmony.mode];
     const root = ROOT_NOTES[harmony.rootNote];
-    const degree = modeIntervals[degreeIndex % modeIntervals.length] ?? 0;
-    const candidateMidi = this.getBaseMidiForFamily(family) + root + degree;
-    const midi = this.quantizer.quantizeMidi(root, modeIntervals, candidateMidi);
+    const midi = this.getScaleMidiForFamily(family, root, modeIntervals, degreeIndex);
     const frequency = midiToFrequency(midi);
     const now = context.currentTime + offsetSeconds;
 
@@ -382,6 +389,15 @@ class AuthoringAuditionEngine {
     oscillator.connect(gain);
     oscillator.start(now);
     oscillator.stop(now + this.getDecayForFamily(family) + 0.04);
+  }
+
+  private getScaleMidiForFamily(
+    family: string,
+    root: number,
+    modeIntervals: number[],
+    degreeIndex: number,
+  ): number {
+    return this.quantizer.scaleDegreeToMidi(root, modeIntervals, this.getBaseMidiForFamily(family), degreeIndex);
   }
 
   private getBaseMidiForFamily(family: string): number {
@@ -432,6 +448,7 @@ export class AuthoringApp {
   private audio = new Audio();
   private audition = new AuthoringAuditionEngine();
   private saveHandles = new Map<string, AuthoringFileHandle>();
+  private songConfigCache = new Map<string, SongConfig>();
   private selectedAlbumId: string;
   private selectedSongId: string;
   private selectedClipKey = "";
@@ -446,6 +463,7 @@ export class AuthoringApp {
   private currentBarValue?: HTMLElement;
   private progressFill?: HTMLElement;
   private barRulerSpans: HTMLElement[] = [];
+  private songStateLoadToken = 0;
 
   constructor(private root: HTMLDivElement) {
     const firstAlbum = MUSIC_LIBRARY.albums[0];
@@ -459,10 +477,11 @@ export class AuthoringApp {
 
     this.selectedAlbumId = firstAlbum.id;
     this.selectedSongId = firstSong.id;
-    this.syncSongState();
+    this.statusMessage = `Loading ${firstSong.title}...`;
     this.renderShell();
     this.bindEvents();
     void this.loadSuggestions();
+    void this.syncSongState();
     this.updateUi();
   }
 
@@ -507,24 +526,33 @@ export class AuthoringApp {
       if (firstSong) {
         this.selectedSongId = firstSong.id;
       }
-      this.syncSongState();
+      void this.syncSongState();
       this.stopSequencer();
       this.updateUi();
       return;
     }
 
     if (target.dataset.songSelect !== undefined) {
+      const wasPlaying = !this.audio.paused;
       this.selectedSongId = target.value;
-      this.syncSongState();
+      void this.syncSongState();
       this.stopSequencer();
+      if (wasPlaying) {
+        void this.playSelectedClip(true);
+      }
       this.updateUi();
       return;
     }
 
     if (target.dataset.clipSelect !== undefined) {
+      const wasPlaying = !this.audio.paused;
       this.selectedClipKey = target.value;
-      this.stopClipPlayback();
       this.stopSequencer();
+      if (wasPlaying) {
+        void this.playSelectedClip(true);
+      } else {
+        this.stopClipPlayback();
+      }
       this.updateUi();
       return;
     }
@@ -672,7 +700,7 @@ export class AuthoringApp {
 
   private async loadSuggestions(): Promise<void> {
     try {
-      const response = await fetch("/docs/harmony_suggestions.json");
+      const response = await fetch(`${import.meta.env.BASE_URL}docs/harmony_suggestions.json`);
       if (!response.ok) {
         return;
       }
@@ -698,9 +726,28 @@ export class AuthoringApp {
     return MUSIC_LIBRARY.songs.find((song) => song.id === this.selectedSongId) ?? this.getSongsForSelectedAlbum()[0];
   }
 
+  private getSelectedSongConfig(): SongConfig | undefined {
+    return this.songConfigCache.get(this.selectedSongId);
+  }
+
+  private async ensureSongConfig(song: SongEntry): Promise<SongConfig> {
+    const cached = this.songConfigCache.get(song.id);
+    if (cached) {
+      return cached;
+    }
+    const loaded = await song.loadConfig();
+    this.songConfigCache.set(song.id, loaded);
+    return loaded;
+  }
+
   private getSelectedSongClips(): AuthoringClip[] {
+    const songConfig = this.getSelectedSongConfig();
+    if (!songConfig) {
+      return [];
+    }
+
     const clips: AuthoringClip[] = [];
-    for (const grooveLevel of this.getSelectedSong().config.grooveLevels) {
+    for (const grooveLevel of songConfig.grooveLevels) {
       if (grooveLevel.intro) {
         clips.push({
           key: `${grooveLevel.level}:intro`,
@@ -727,14 +774,31 @@ export class AuthoringApp {
     return clips;
   }
 
-  private getSelectedClip(): AuthoringClip {
-    return this.getSelectedSongClips().find((clip) => clip.key === this.selectedClipKey) ?? this.getSelectedSongClips()[0];
+  private getSelectedClip(): AuthoringClip | undefined {
+    const clips = this.getSelectedSongClips();
+    return clips.find((clip) => clip.key === this.selectedClipKey) ?? clips[0];
   }
 
   private getSelectedClipSuggestions(): HarmonySuggestionClip {
-    const songSuggestions = this.suggestions.songs?.[this.getSelectedSong().config.id];
+    const song = this.getSelectedSong();
+    const songSuggestions =
+      this.suggestions.songs?.[song.id] ??
+      this.suggestions.songs?.[song.slug] ??
+      this.suggestions.songs?.[this.getSelectedSongConfig()?.id ?? ""];
     const clip = this.getSelectedClip();
-    return songSuggestions?.clips.find((entry) => entry.file === clip.filename) ?? {
+    if (!clip) {
+      return {
+        file: "",
+        durationSeconds: 0,
+        estimatedBars: 0,
+        overall: [],
+        bars: [],
+      };
+    }
+    const normalizedClipFilename = normalizeClipFilename(clip.filename);
+    return songSuggestions?.clips.find(
+      (entry) => entry.file === clip.filename || normalizeClipFilename(entry.file) === normalizedClipFilename,
+    ) ?? {
       file: clip.filename,
       durationSeconds: clip.bars * this.getSecondsPerBar(),
       estimatedBars: clip.bars,
@@ -743,14 +807,26 @@ export class AuthoringApp {
     };
   }
 
-  private syncSongState(): void {
+  private async syncSongState(): Promise<void> {
     const song = this.getSelectedSong();
-    this.harmonyCycleBars = song.config.transport.harmonyCycleBars;
-    this.harmonyBars = expandHarmonyTimeline(song.config.harmonyTimeline, this.harmonyCycleBars);
+    const token = ++this.songStateLoadToken;
+    this.selectedClipKey = "";
+    this.selectedBarIndex = 0;
+    this.statusMessage = `Loading ${song.title}...`;
+    this.updateUi();
+
+    const songConfig = await this.ensureSongConfig(song);
+    if (token != this.songStateLoadToken || this.selectedSongId !== song.id) {
+      return;
+    }
+
+    this.harmonyCycleBars = songConfig.transport.harmonyCycleBars;
+    this.harmonyBars = expandHarmonyTimeline(songConfig.harmonyTimeline, this.harmonyCycleBars);
     const firstClip = this.getSelectedSongClips()[0];
     this.selectedClipKey = firstClip?.key ?? "";
     this.selectedBarIndex = 0;
     this.statusMessage = `Loaded ${song.title}.`;
+    this.updateUi();
   }
 
   private setHarmonyCycleBars(nextLength: number): void {
@@ -764,35 +840,35 @@ export class AuthoringApp {
   }
 
   private getSecondsPerBar(): number {
-    const song = this.getSelectedSong();
-    return (60 / song.config.transport.bpm) * song.config.transport.beatsPerBar;
+    const songConfig = this.getSelectedSongConfig();
+    if (!songConfig) {
+      return 2;
+    }
+    return (60 / songConfig.transport.bpm) * songConfig.transport.beatsPerBar;
   }
 
   private getCurrentClipBarIndex(): number {
     const clip = this.getSelectedClip();
+    if (!clip) {
+      return 0;
+    }
     const secondsPerBar = this.getSecondsPerBar();
     const rawBar = Math.floor((this.audio.currentTime % Math.max(0.01, clip.bars * secondsPerBar)) / secondsPerBar);
     return clamp(rawBar, 0, Math.max(0, clip.bars - 1));
   }
 
   private getSelectedHarmonyBar(): HarmonyBarState {
+    if (this.harmonyBars.length === 0) {
+      return { rootNote: "C", mode: "pentatonicMinor" };
+    }
     const clipBarIndex = this.getCurrentClipBarIndex();
     const cycleIndex = clipBarIndex % this.harmonyBars.length;
     return this.harmonyBars[cycleIndex] ?? this.harmonyBars[0];
   }
 
   private async toggleClipPlayback(): Promise<void> {
-    const clip = this.getSelectedClip();
-    if (this.audio.src !== clip.src) {
-      this.audio.src = clip.src;
-      this.audio.loop = true;
-      this.audio.currentTime = 0;
-    }
-
     if (this.audio.paused) {
-      await this.audio.play();
-      this.statusMessage = `Playing ${clip.filename}.`;
-      this.startAnimationLoop();
+      await this.playSelectedClip();
     } else {
       this.audio.pause();
       this.statusMessage = "Clip paused.";
@@ -802,6 +878,25 @@ export class AuthoringApp {
       }
     }
     this.updateUi();
+  }
+
+  private async playSelectedClip(autoplay = false): Promise<void> {
+    await this.ensureSongConfig(this.getSelectedSong());
+    const clip = this.getSelectedClip();
+    if (!clip) {
+      this.statusMessage = "No clip is available for the selected song.";
+      this.updateUi();
+      return;
+    }
+    if (this.audio.src !== clip.src) {
+      this.audio.src = clip.src;
+      this.audio.loop = true;
+      this.audio.currentTime = 0;
+    }
+
+    await this.audio.play();
+    this.statusMessage = autoplay ? `Switched to ${clip.filename}.` : `Playing ${clip.filename}.`;
+    this.startAnimationLoop();
   }
 
   private stopClipPlayback(): void {
@@ -830,9 +925,10 @@ export class AuthoringApp {
   }
 
   private async toggleSequencer(): Promise<void> {
+    const readyConfig = await this.ensureSongConfig(this.getSelectedSong());
     const next = await this.audition.toggleSequence(
       !this.sequencerEnabled,
-      this.getSelectedSong().config.transport.bpm,
+      readyConfig.transport.bpm,
       () => this.getSelectedHarmonyBar(),
       this.selectedFamily,
     );
@@ -845,9 +941,13 @@ export class AuthoringApp {
     if (!this.sequencerEnabled) {
       return;
     }
+    const songConfig = this.getSelectedSongConfig();
+    if (!songConfig) {
+      return;
+    }
     this.sequencerEnabled = await this.audition.toggleSequence(
       true,
-      this.getSelectedSong().config.transport.bpm,
+      songConfig.transport.bpm,
       () => this.getSelectedHarmonyBar(),
       this.selectedFamily,
     );
@@ -855,7 +955,8 @@ export class AuthoringApp {
   }
 
   private stopSequencer(): void {
-    void this.audition.toggleSequence(false, this.getSelectedSong().config.transport.bpm, () => this.getSelectedHarmonyBar(), this.selectedFamily);
+    const bpm = this.getSelectedSongConfig()?.transport.bpm ?? 120;
+    void this.audition.toggleSequence(false, bpm, () => this.getSelectedHarmonyBar(), this.selectedFamily);
     this.sequencerEnabled = false;
   }
 
@@ -896,7 +997,12 @@ export class AuthoringApp {
 
     const file = await handle.getFile();
     const originalText = await file.text();
-    const expectedConfigId = this.getSelectedSong().config.id;
+    const expectedConfigId = this.getSelectedSongConfig()?.id;
+    if (!expectedConfigId) {
+      this.statusMessage = "Song config is still loading.";
+      this.updateUi();
+      return;
+    }
     if (!originalText.includes(`id: "${expectedConfigId}"`)) {
       this.statusMessage = `Selected file does not look like ${expectedConfigId}.`;
       this.updateUi();
@@ -915,14 +1021,15 @@ export class AuthoringApp {
     const album = this.getSelectedAlbum();
     const songs = this.getSongsForSelectedAlbum();
     const song = this.getSelectedSong();
+    const songConfig = this.getSelectedSongConfig();
     const clips = this.getSelectedSongClips();
     const clip = this.getSelectedClip();
     const clipSuggestions = this.getSelectedClipSuggestions();
-    const currentClipBar = clip.src === this.audio.src && !this.audio.paused ? this.getCurrentClipBarIndex() : 0;
+    const currentClipBar = clip && clip.src === this.audio.src && !this.audio.paused ? this.getCurrentClipBarIndex() : 0;
     const selectedBarSuggestions =
       clipSuggestions.bars.find((entry) => entry.bar === this.selectedBarIndex + 1)?.suggestions ?? [];
-    const overallSuggestions = clipSuggestions.overall;
-    const selectedBar = this.harmonyBars[this.selectedBarIndex] ?? this.harmonyBars[0];
+    const overallSuggestions = songConfig ? clipSuggestions.overall : [];
+    const selectedBar = this.harmonyBars[this.selectedBarIndex] ?? this.harmonyBars[0] ?? { rootNote: "C", mode: "pentatonicMinor" as ScaleModeName };
     const familyOptions = ["bell", "bass", "spark", "snare"]
       .map((family) => `<option value="${family}"${this.selectedFamily === family ? " selected" : ""}>${family}</option>`)
       .join("");
@@ -973,13 +1080,15 @@ export class AuthoringApp {
               </label>
               <label class="authoring-label">
                 <span>Clip</span>
-                <select data-clip-select>
-                  ${clips
+                <select data-clip-select${songConfig ? "" : " disabled"}>
+                  ${songConfig
+                    ? clips
                     .map(
                       (entry) =>
-                        `<option value="${entry.key}"${entry.key === clip.key ? " selected" : ""}>${escapeHtml(entry.label)} · ${entry.bars} bars</option>`,
+                        `<option value="${entry.key}"${entry.key === clip?.key ? " selected" : ""}>${escapeHtml(entry.label)} · ${entry.bars} bars</option>`,
                     )
-                    .join("")}
+                    .join("")
+                    : "<option>Loading song config...</option>"}
                 </select>
               </label>
             </section>
@@ -989,7 +1098,9 @@ export class AuthoringApp {
               <div class="authoring-suggestion-block">
                 <h3>Clip Overall</h3>
                 ${
-                  overallSuggestions.length > 0
+                  !songConfig
+                    ? "<p class=\"authoring-empty\">Song config is loading.</p>"
+                    : overallSuggestions.length > 0
                     ? overallSuggestions
                         .map(
                           (entry, index) => `
@@ -1006,7 +1117,9 @@ export class AuthoringApp {
               <div class="authoring-suggestion-block">
                 <h3>Bar ${this.selectedBarIndex + 1}</h3>
                 ${
-                  selectedBarSuggestions.length > 0
+                  !songConfig
+                    ? "<p class=\"authoring-empty\">Song config is loading.</p>"
+                    : selectedBarSuggestions.length > 0
                     ? selectedBarSuggestions
                         .map(
                           (entry, index) => `
@@ -1028,29 +1141,29 @@ export class AuthoringApp {
               <div class="authoring-transport-head">
                 <div>
                   <span class="section-label">Clip Transport</span>
-                  <h2>${escapeHtml(clip.filename)}</h2>
-                  <p>${escapeHtml(song.title)} · ${clip.role} · groove ${clip.grooveLevel}</p>
+                  <h2>${escapeHtml(clip?.filename ?? "Loading clip...")}</h2>
+                  <p>${escapeHtml(song.title)}${clip ? ` · ${clip.role} · groove ${clip.grooveLevel}` : " · loading config"}</p>
                 </div>
                 <div class="authoring-actions">
-                  <button type="button" class="play-button" data-action="play-clip">${this.audio.src === clip.src && !this.audio.paused ? "Pause Clip" : "Play Clip"}</button>
-                  <button type="button" class="library-chip" data-action="preview-chord">Preview Chord</button>
-                  <button type="button" class="library-chip" data-action="toggle-sequence">${this.sequencerEnabled ? "Stop Sequence" : "Start Sequence"}</button>
+                  <button type="button" class="play-button" data-action="play-clip"${clip ? "" : " disabled"}>${clip && this.audio.src === clip.src && !this.audio.paused ? "Pause Clip" : "Play Clip"}</button>
+                  <button type="button" class="library-chip" data-action="preview-chord"${songConfig ? "" : " disabled"}>Preview Chord</button>
+                  <button type="button" class="library-chip" data-action="toggle-sequence"${songConfig ? "" : " disabled"}>${this.sequencerEnabled ? "Stop Sequence" : "Start Sequence"}</button>
                 </div>
               </div>
 
               <div class="authoring-stats">
-                <div><strong>${song.config.transport.bpm}</strong><span>BPM</span></div>
-                <div><strong>${clip.bars}</strong><span>Clip Bars</span></div>
+                <div><strong>${songConfig?.transport.bpm ?? "…"}</strong><span>BPM</span></div>
+                <div><strong>${clip?.bars ?? "…"}</strong><span>Clip Bars</span></div>
                 <div><strong>${this.harmonyCycleBars}</strong><span>Harmony Bars</span></div>
                 <div><strong data-current-bar-value>${currentClipBar + 1}</strong><span>Current Bar</span></div>
               </div>
 
               <div class="authoring-progress">
-                <div class="authoring-progress-fill" data-authoring-progress-fill style="width:${clip.src === this.audio.src && clip.bars > 0 ? ((this.audio.currentTime / Math.max(0.001, clip.bars * this.getSecondsPerBar())) % 1) * 100 : 0}%"></div>
+                <div class="authoring-progress-fill" data-authoring-progress-fill style="width:${clip && clip.src === this.audio.src && clip.bars > 0 ? ((this.audio.currentTime / Math.max(0.001, clip.bars * this.getSecondsPerBar())) % 1) * 100 : 0}%"></div>
               </div>
 
               <div class="authoring-bar-ruler" data-authoring-bar-ruler>
-                ${Array.from({ length: clip.bars }, (_, index) => `<span data-ruler-bar="${index}" class="${index === currentClipBar ? "active" : ""}">${index + 1}</span>`).join("")}
+                ${Array.from({ length: clip?.bars ?? 0 }, (_, index) => `<span data-ruler-bar="${index}" class="${index === currentClipBar ? "active" : ""}">${index + 1}</span>`).join("")}
               </div>
             </section>
 
@@ -1078,7 +1191,12 @@ export class AuthoringApp {
                         `<option value="${mode}"${bar.mode === mode ? " selected" : ""}>${MODE_LABELS[mode]}</option>`,
                     ).join("");
                     const selected = index === this.selectedBarIndex;
-                    const live = index === (currentClipBar % this.harmonyBars.length) && this.audio.src === clip.src && !this.audio.paused;
+                    const live =
+                      Boolean(clip) &&
+                      this.harmonyBars.length > 0 &&
+                      index === (currentClipBar % this.harmonyBars.length) &&
+                      this.audio.src === clip?.src &&
+                      !this.audio.paused;
                     return `
                       <div class="authoring-bar-card${selected ? " selected" : ""}${live ? " live" : ""}" data-bar-index="${index}">
                         <button type="button" class="authoring-bar-hit" data-action="select-bar" data-bar-index="${index}">
@@ -1136,6 +1254,19 @@ export class AuthoringApp {
 
   private syncPlaybackUi(): void {
     const clip = this.getSelectedClip();
+    if (!clip) {
+      if (this.currentBarValue) {
+        this.currentBarValue.textContent = "0";
+      }
+      if (this.progressFill) {
+        this.progressFill.style.width = "0%";
+      }
+      this.barRulerSpans.forEach((span) => {
+        span.classList.remove("active");
+      });
+      return;
+    }
+
     const isActiveClip = this.audio.src === clip.src && !this.audio.paused;
     const currentClipBar = isActiveClip ? this.getCurrentClipBarIndex() : 0;
     const progressPercent = isActiveClip && clip.bars > 0

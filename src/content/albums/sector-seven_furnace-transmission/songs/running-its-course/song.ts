@@ -1,4 +1,3 @@
-import { SONG10_CONFIG } from "./config";
 import type { SongManifest } from "../../../../schema";
 
 export const RUNNING_ITS_COURSE_SONG: SongManifest = {
@@ -13,5 +12,5 @@ export const RUNNING_ITS_COURSE_SONG: SongManifest = {
   moodTags: ["driving", "uplifting", "melodic"],
   recommendedWeight: 1,
   availability: "included",
-  config: SONG10_CONFIG,
+  loadConfig: async () => (await import("./config")).SONG10_CONFIG,
 };

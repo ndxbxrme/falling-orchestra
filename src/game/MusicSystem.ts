@@ -24,10 +24,8 @@ const DEFAULT_BPM = 120;
 const INITIAL_TRANSPORT_LEAD = 0.35;
 const MIN_SCHEDULE_LOOKAHEAD = 0.012;
 const TRANSPORT_LOOKAHEAD = 0.16;
-const LOOP_DEBUG =
-  typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-const SOLO_DEBUG = LOOP_DEBUG;
+const MAX_ACTIVE_IMPACT_VOICES = 24;
+const MAX_ACTIVE_MEGA_VOICES = 6;
 const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
   voices: {
     bell: {
@@ -125,22 +123,15 @@ const midiToLabel = (midi: number): string => {
 };
 
 const logLoopDebug = (message: string, details?: Record<string, unknown>): void => {
-  if (!LOOP_DEBUG) {
-    return;
-  }
-
-  if (details) {
-    console.debug(`[MusicSystem] ${message}`, details);
-    return;
-  }
-
-  console.debug(`[MusicSystem] ${message}`);
+  void message;
+  void details;
 };
 
 export class MusicSystem {
   rootNote: RootNoteName = "C";
   mode: ScaleModeName = "ionian";
   muted = false;
+  paused = false;
   volume = 0.72;
   currentGrooveLevel = 1;
 
@@ -225,6 +216,7 @@ export class MusicSystem {
     y: 0,
     intensity: 0,
   };
+  private activeImpactVoiceEnds: number[] = [];
 
   loadSong(song: SongConfig): void {
     this.song = song;
@@ -260,6 +252,7 @@ export class MusicSystem {
     this.endingCompletesAt = undefined;
     this.songCompleted = false;
     this.songEndingScheduled = false;
+    this.activeImpactVoiceEnds = [];
     this.lastSoloMidi = undefined;
     this.soloStepDirection = 1;
     this.nextGrooveBoundaryTime = undefined;
@@ -331,6 +324,11 @@ export class MusicSystem {
     this.syncMasterVolume();
   }
 
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    this.syncMasterVolume(true);
+  }
+
   setVolume(volume: number): void {
     this.volume = volume;
     this.syncMasterVolume();
@@ -371,6 +369,7 @@ export class MusicSystem {
     this.endingCompletesAt = undefined;
     this.songCompleted = false;
     this.songEndingScheduled = false;
+    this.activeImpactVoiceEnds = [];
     this.lastSoloMidi = undefined;
     this.soloStepDirection = 1;
     this.stopSoloVoice();
@@ -496,16 +495,6 @@ export class MusicSystem {
       options.noteRange,
       options.normalizedX,
     );
-    if (SOLO_DEBUG) {
-      console.debug("[SoloDebug] triggerSoloNote", {
-        baseMidi,
-        quantized,
-        lastSoloMidi: this.lastSoloMidi,
-        normalizedX: options.normalizedX,
-        rootNote: harmony.rootNote,
-        mode: harmony.mode,
-      });
-    }
     this.lastSoloMidi = quantized;
 
     this.playSoloVoice(quantized, options.normalizedX, when);
@@ -537,6 +526,7 @@ export class MusicSystem {
 
   dispose(): void {
     this.stopSoloVoice();
+    this.activeImpactVoiceEnds = [];
     void this.audioContext?.close();
   }
 
@@ -709,16 +699,20 @@ export class MusicSystem {
     return clamp(basePulse * tail * accent, 0, 1);
   }
 
-  private syncMasterVolume(): void {
+  private syncMasterVolume(immediate = false): void {
     if (!this.masterGain || !this.audioContext) {
       return;
     }
 
-    this.masterGain.gain.setTargetAtTime(
-      this.muted ? 0.0001 : this.volume,
-      this.audioContext.currentTime,
-      0.02,
-    );
+    const targetGain = this.paused || this.muted ? 0.0001 : this.volume;
+
+    if (immediate) {
+      this.masterGain.gain.cancelScheduledValues(this.audioContext.currentTime);
+      this.masterGain.gain.setValueAtTime(targetGain, this.audioContext.currentTime);
+      return;
+    }
+
+    this.masterGain.gain.setTargetAtTime(targetGain, this.audioContext.currentTime, 0.02);
   }
 
   private playVoice(options: {
@@ -735,35 +729,108 @@ export class MusicSystem {
       return;
     }
 
+    this.pruneActiveImpactVoices(options.when);
     const voiceConfig = this.impactPalette.voices[options.family];
+    if (!this.canScheduleImpactVoice(options.family, options.gain, options.combo ?? false)) {
+      return;
+    }
     const frequency = midiToFrequency(options.midi);
     const output = this.audioContext.createGain();
     output.gain.setValueAtTime(1, options.when);
-    this.routeImpactVoice(output, voiceConfig.routing, options.pan, options.when);
-    this.playImpactSampleLayer(voiceConfig.sampleLayer, output, options.when, options.gain);
+    const cleanupNodes = this.routeImpactVoice(output, voiceConfig.routing, options.pan, options.when);
+    let voiceDuration = this.playImpactSampleLayer(voiceConfig.sampleLayer, output, options.when, options.gain);
 
     if (voiceConfig.mode === "stab") {
-      this.playStabVoice(voiceConfig, frequency, options.gain, options.when, output);
+      voiceDuration = Math.max(
+        voiceDuration,
+        this.playStabVoice(voiceConfig, frequency, options.gain, options.when, output),
+      );
+      this.registerImpactVoiceLifetime(options.when, voiceDuration, output, cleanupNodes);
       return;
     }
 
     if (voiceConfig.mode === "sub") {
-      this.playSubVoice(voiceConfig, frequency, options.gain, options.when, output);
+      voiceDuration = Math.max(
+        voiceDuration,
+        this.playSubVoice(voiceConfig, frequency, options.gain, options.when, output),
+      );
+      this.registerImpactVoiceLifetime(options.when, voiceDuration, output, cleanupNodes);
       return;
     }
 
     if (voiceConfig.mode === "tick") {
-      this.playTickVoice(voiceConfig, frequency, options.gain, options.when, output);
+      voiceDuration = Math.max(
+        voiceDuration,
+        this.playTickVoice(voiceConfig, frequency, options.gain, options.when, output),
+      );
+      this.registerImpactVoiceLifetime(options.when, voiceDuration, output, cleanupNodes);
       return;
     }
 
     if (voiceConfig.mode === "snare") {
-      this.playSnareVoice(voiceConfig, options.impact, options.when, output);
+      voiceDuration = Math.max(
+        voiceDuration,
+        this.playSnareVoice(voiceConfig, options.impact, options.when, output),
+      );
+      this.registerImpactVoiceLifetime(options.when, voiceDuration, output, cleanupNodes);
       return;
     }
 
     this.triggerMegaMacro(options.normalizedX, clamp(options.impact / 18, 0, 1), options.combo ?? false);
-    this.playMegaVoice(voiceConfig, frequency, options.impact, options.when, output, options.combo ?? false);
+    voiceDuration = Math.max(
+      voiceDuration,
+      this.playMegaVoice(voiceConfig, frequency, options.impact, options.when, output, options.combo ?? false),
+    );
+    this.registerImpactVoiceLifetime(options.when, voiceDuration, output, cleanupNodes);
+  }
+
+  private pruneActiveImpactVoices(now: number): void {
+    if (this.activeImpactVoiceEnds.length === 0) {
+      return;
+    }
+
+    this.activeImpactVoiceEnds = this.activeImpactVoiceEnds.filter((endTime) => endTime > now);
+  }
+
+  private canScheduleImpactVoice(family: InstrumentFamily, gain: number, combo: boolean): boolean {
+    const activeCount = this.activeImpactVoiceEnds.length;
+    if (family === "mega" || combo) {
+      return activeCount < MAX_ACTIVE_MEGA_VOICES;
+    }
+
+    if (activeCount >= MAX_ACTIVE_IMPACT_VOICES) {
+      return false;
+    }
+
+    if (activeCount >= Math.floor(MAX_ACTIVE_IMPACT_VOICES * 0.75) && gain < 0.28) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private registerImpactVoiceLifetime(
+    when: number,
+    duration: number,
+    output: GainNode,
+    cleanupNodes: AudioNode[],
+  ): void {
+    if (!this.audioContext) {
+      return;
+    }
+
+    const safeDuration = Math.max(0.06, duration);
+    const endTime = when + safeDuration;
+    this.activeImpactVoiceEnds.push(endTime);
+    const cleanupDelayMs = Math.max(0, (endTime - this.audioContext.currentTime + 0.08) * 1000);
+
+    window.setTimeout(() => {
+      output.disconnect();
+      for (const node of cleanupNodes) {
+        node.disconnect();
+      }
+      this.pruneActiveImpactVoices(this.audioContext?.currentTime ?? Number.POSITIVE_INFINITY);
+    }, cleanupDelayMs);
   }
 
   private getNextSixteenthTime(): number {
@@ -1695,19 +1762,21 @@ export class MusicSystem {
     routing: ImpactRoutingConfig,
     pan: number,
     when: number,
-  ): void {
+  ): AudioNode[] {
     if (!this.audioContext) {
-      return;
+      return [];
     }
 
     const panner = this.audioContext.createStereoPanner();
+    const cleanupNodes: AudioNode[] = [panner];
     source.connect(panner);
     panner.pan.setValueAtTime(pan, when);
-    this.connectBusSend(panner, this.dryBusGain, routing.dry, when);
-    this.connectBusSend(panner, this.driveBusInput, routing.drive, when);
-    this.connectBusSend(panner, this.delayBusInput, routing.delay, when);
-    this.connectBusSend(panner, this.reverbBusInput, routing.reverb, when);
-    this.connectBusSend(panner, this.megaBusInput, routing.megaFx, when);
+    this.connectBusSend(panner, this.dryBusGain, routing.dry, when, cleanupNodes);
+    this.connectBusSend(panner, this.driveBusInput, routing.drive, when, cleanupNodes);
+    this.connectBusSend(panner, this.delayBusInput, routing.delay, when, cleanupNodes);
+    this.connectBusSend(panner, this.reverbBusInput, routing.reverb, when, cleanupNodes);
+    this.connectBusSend(panner, this.megaBusInput, routing.megaFx, when, cleanupNodes);
+    return cleanupNodes;
   }
 
   private connectBusSend(
@@ -1715,6 +1784,7 @@ export class MusicSystem {
     destination: AudioNode | undefined,
     amount: number,
     when: number,
+    cleanupNodes?: AudioNode[],
   ): void {
     if (!this.audioContext || !destination || amount <= 0) {
       return;
@@ -1724,6 +1794,7 @@ export class MusicSystem {
     send.gain.setValueAtTime(amount, when);
     source.connect(send);
     send.connect(destination);
+    cleanupNodes?.push(send);
   }
 
   private createNoiseBuffer(): AudioBuffer {
@@ -1794,14 +1865,14 @@ export class MusicSystem {
     output: GainNode,
     when: number,
     gainAmount: number,
-  ): void {
+  ): number {
     if (!this.audioContext || !sampleLayer?.src) {
-      return;
+      return 0;
     }
 
     const buffer = this.impactSampleBuffers.get(sampleLayer.src);
     if (!buffer) {
-      return;
+      return 0;
     }
 
     const source = this.audioContext.createBufferSource();
@@ -1825,12 +1896,14 @@ export class MusicSystem {
 
     gain.connect(output);
     source.start(when);
-    source.stop(when + buffer.duration / (sampleLayer.playbackRate ?? 1));
+    const duration = buffer.duration / (sampleLayer.playbackRate ?? 1);
+    source.stop(when + duration);
     source.addEventListener("ended", () => {
       source.disconnect();
       gain.disconnect();
       tail.disconnect();
     });
+    return duration;
   }
 
   private playStabVoice(
@@ -1839,7 +1912,7 @@ export class MusicSystem {
     gainAmount: number,
     when: number,
     output: GainNode,
-  ): void {
+  ): number {
     const ctx = this.audioContext!;
     const bodyA = ctx.createOscillator();
     const bodyB = ctx.createOscillator();
@@ -1878,6 +1951,7 @@ export class MusicSystem {
     bodyA.stop(when + config.decay + 0.08);
     bodyB.stop(when + config.decay + 0.08);
     metallic.stop(when + config.decay + 0.06);
+    return config.decay + 0.08;
   }
 
   private playSubVoice(
@@ -1886,7 +1960,7 @@ export class MusicSystem {
     gainAmount: number,
     when: number,
     output: GainNode,
-  ): void {
+  ): number {
     const ctx = this.audioContext!;
     const body = ctx.createOscillator();
     const sub = ctx.createOscillator();
@@ -1930,6 +2004,7 @@ export class MusicSystem {
     body.stop(when + config.decay + 0.12);
     sub.stop(when + config.decay + 0.16);
     click.stop(when + 0.06);
+    return config.decay + 0.16;
   }
 
   private playTickVoice(
@@ -1938,7 +2013,7 @@ export class MusicSystem {
     gainAmount: number,
     when: number,
     output: GainNode,
-  ): void {
+  ): number {
     const ctx = this.audioContext!;
     const body = ctx.createOscillator();
     const overtone = ctx.createOscillator();
@@ -1983,6 +2058,7 @@ export class MusicSystem {
     body.stop(when + config.decay + 0.08);
     overtone.stop(when + config.decay + 0.08);
     noise.stop(when + config.decay * 0.78);
+    return config.decay + 0.08;
   }
 
   private playSnareVoice(
@@ -1990,7 +2066,7 @@ export class MusicSystem {
     impact: number,
     when: number,
     output: GainNode,
-  ): void {
+  ): number {
     const ctx = this.audioContext!;
     const noise = ctx.createBufferSource();
     const noiseFilter = ctx.createBiquadFilter();
@@ -2042,6 +2118,7 @@ export class MusicSystem {
     noise.stop(when + config.decay + 0.02);
     body.stop(when + config.decay * 0.84);
     click.stop(when + 0.024);
+    return config.decay + 0.04;
   }
 
   private playMegaVoice(
@@ -2051,7 +2128,7 @@ export class MusicSystem {
     when: number,
     output: GainNode,
     combo: boolean,
-  ): void {
+  ): number {
     const ctx = this.audioContext!;
     const noise = ctx.createBufferSource();
     const noiseFilter = ctx.createBiquadFilter();
@@ -2105,6 +2182,7 @@ export class MusicSystem {
     sub.stop(when + config.decay + 0.16);
     bodyA.stop(when + config.decay + 0.14);
     bodyB.stop(when + config.decay + 0.1);
+    return config.decay + (combo ? 0.18 : 0.16);
   }
 
   private triggerMegaMacro(normalizedX: number, normalizedY: number, combo: boolean): void {

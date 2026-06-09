@@ -8,33 +8,18 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
+import { getBackdropModuleById } from "../content/backdrops";
+import type {
+  BackdropInstance,
+  BackdropModule,
+  BackdropParamValue,
+  BackdropRuntimeInputs,
+} from "../content/backdrops";
 import { GAME_CONFIG, OBJECT_DEFINITIONS } from "./config";
 import type { ArenaBounds, MusicalObject, ObjectType, Surface, SurfaceKind, TransitionState } from "./types";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
-
-const closestPointOnSegment = (point: Vector2, a: Vector2, b: Vector2): Vector2 => {
-  const segment = b.subtract(a);
-  const segmentLengthSquared = segment.lengthSquared();
-
-  if (segmentLengthSquared === 0) {
-    return a.clone();
-  }
-
-  const t = clamp(Vector2.Dot(point.subtract(a), segment) / segmentLengthSquared, 0, 1);
-  return a.add(segment.scale(t));
-};
-
-const segmentNormal = (a: Vector2, b: Vector2): Vector2 => {
-  const delta = b.subtract(a);
-  return new Vector2(-delta.y, delta.x).normalize();
-};
-
-const segmentDirection = (a: Vector2, b: Vector2): Vector2 => b.subtract(a).normalize();
-
-const lerpVector2 = (a: Vector2, b: Vector2, t: number): Vector2 =>
-  a.scale(1 - t).add(b.scale(t));
 
 const hex = (value: string): Color3 => Color3.FromHexString(value);
 
@@ -53,13 +38,12 @@ const PLAYFIELD_GUIDE_COLOR = "#6bdce6";
 const PLAYFIELD_WARN_COLOR = "#ff5a53";
 const BUMPER_CORE_COLOR = "#82f8ff";
 const BUMPER_DIM_COLOR = "#182430";
-const SOLO_DEBUG =
-  typeof window !== "undefined" &&
-  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 interface PulseEffect {
+  active: boolean;
   mesh: Mesh;
   material: StandardMaterial;
+  baseRadius: number;
   age: number;
   lifetime: number;
   startScale: number;
@@ -82,9 +66,17 @@ interface BackdropLaser {
   baseY: number;
 }
 
+interface SurfaceHit {
+  positionX: number;
+  positionY: number;
+  closestX: number;
+  closestY: number;
+  normalX: number;
+  normalY: number;
+  distance: number;
+}
+
 interface PlayfieldDecor {
-  rails: Mesh[];
-  railMaterials: StandardMaterial[];
   centerline: Mesh;
   centerlineMaterial: StandardMaterial;
   centerTicks: Mesh[];
@@ -93,6 +85,18 @@ interface PlayfieldDecor {
   radialMaterials: StandardMaterial[];
   lowerGuides: Mesh[];
   lowerGuideMaterials: StandardMaterial[];
+}
+
+interface PooledBallVisual {
+  outer: Mesh;
+  core: Mesh;
+  variant: "default" | "solo";
+  active: boolean;
+}
+
+interface WorldOptions {
+  backdropPresetId?: string;
+  backdropParams?: Record<string, BackdropParamValue>;
 }
 
 const MEGA_COLORS = [
@@ -328,6 +332,9 @@ export class World {
   private objects: MusicalObject[] = [];
   private baseSurfaces: Surface[] = [];
   private pulses: PulseEffect[] = [];
+  private ballVisualPool: PooledBallVisual[] = [];
+  private objectPool: MusicalObject[] = [];
+  private objectById = new Map<number, MusicalObject>();
   private nextObjectId = 0;
   private objectMaterials = new Map<ObjectType, { outer: StandardMaterial; inner: StandardMaterial }>();
   private playerCoreMaterial: StandardMaterial;
@@ -350,11 +357,19 @@ export class World {
   private cameraBasePosition = new Vector3(0, 0, -18);
   private playerWidth: number = GAME_CONFIG.playerWidth;
   private playerX = 0;
+  private previousPositionScratch = new Vector2();
+  private backdropModule?: BackdropModule;
+  private backdropInstance?: BackdropInstance;
+  private activeLegacyBackdropId: string | null = null;
+  private backdropParams: Record<string, BackdropParamValue>;
+  private backdropGrooveLevel = 1;
+  private backdropTotalGrooveLevels = 1;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, options: WorldOptions = {}) {
     this.engine = new Engine(canvas, true);
     this.scene = new Scene(this.engine);
     this.scene.clearColor = new Color4(0.015, 0.018, 0.022, 1);
+    this.backdropParams = options.backdropParams ?? {};
 
     this.camera = new FreeCamera("camera", this.cameraBasePosition.clone(), this.scene);
     this.camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
@@ -369,8 +384,23 @@ export class World {
       });
     }
 
-    this.createBackdrop();
-    this.createPlayfieldDecor();
+    this.backdropModule = getBackdropModuleById(options.backdropPresetId ?? "brutalist-club")
+      ?? getBackdropModuleById("brutalist-club");
+    this.backdropInstance = this.backdropModule?.create({
+      scene: this.scene,
+      engine: this.engine,
+      camera: this.camera,
+      params: this.backdropParams,
+      getBounds: () => this.bounds,
+      activateLegacyBuiltIn: (backdropId: string) => {
+        this.activeLegacyBackdropId = backdropId;
+      },
+    });
+
+    if (this.activeLegacyBackdropId === "brutalist-club") {
+      this.createBackdrop();
+      this.createPlayfieldDecor();
+    }
     this.playerMesh = this.createPlayerAvatar();
     this.playerSurface = this.createPlayerSurface();
     this.resize();
@@ -386,23 +416,24 @@ export class World {
 
   clampPlayerX(x: number): number {
     const halfWidth = this.getResponsivePlayerWidth() * 0.5;
-    const sidePadding = Math.max(halfWidth + 0.7, 1.55);
+    const sidePadding = Math.max(halfWidth + 0.9, 1.75);
     return clamp(x, this.bounds.left + sidePadding, this.bounds.right - sidePadding);
   }
 
-  render(): void {
+  render(interpolationAlpha = 1): void {
+    const deltaSeconds = this.engine.getDeltaTime() * 0.001;
+    this.backdropTime += deltaSeconds;
+
     if (this.backdropMaterial) {
-      const deltaSeconds = this.engine.getDeltaTime() * 0.001;
       const smoothing = Math.min(1, deltaSeconds * 2.2);
       const powerDown = 1 - this.endingIntensity * 0.45;
       const scrollSpeed = (0.045 + this.backdropGrooveIntensity * 0.035) * powerDown;
-      this.backdropTime += deltaSeconds;
-      this.backdropScrollDirection = this.backdropScrollDirection.scale(1 - smoothing).add(
-        this.backdropTargetScrollDirection.scale(smoothing),
-      );
-      this.backdropScrollOffset.addInPlace(
-        this.backdropScrollDirection.scale(deltaSeconds * scrollSpeed),
-      );
+      this.backdropScrollDirection.x +=
+        (this.backdropTargetScrollDirection.x - this.backdropScrollDirection.x) * smoothing;
+      this.backdropScrollDirection.y +=
+        (this.backdropTargetScrollDirection.y - this.backdropScrollDirection.y) * smoothing;
+      this.backdropScrollOffset.x += this.backdropScrollDirection.x * deltaSeconds * scrollSpeed;
+      this.backdropScrollOffset.y += this.backdropScrollDirection.y * deltaSeconds * scrollSpeed;
       this.backdropMaterial.setFloat("iTime", this.backdropTime);
       this.backdropMaterial.setFloat("beatPulse", this.backdropBeatPulse);
       this.backdropMaterial.setFloat("grooveIntensity", this.backdropGrooveIntensity * (1 - this.endingProgress * 0.22));
@@ -410,9 +441,33 @@ export class World {
       this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
     }
 
-    this.syncBackdropArchitecture();
-    this.syncPlayfieldDecor();
-    this.syncCameraMotion();
+    if (this.activeLegacyBackdropId === "brutalist-club") {
+      this.syncBackdropArchitecture();
+      this.syncPlayfieldDecor();
+      this.syncCameraMotion();
+    }
+
+    this.backdropInstance?.update({
+      elapsedTimeSeconds: this.backdropTime,
+      deltaTimeSeconds: deltaSeconds,
+      grooveLevel: this.backdropGrooveLevel,
+      totalGrooveLevels: this.backdropTotalGrooveLevels,
+      grooveIntensity: this.backdropGrooveIntensity,
+      beatPulse: this.backdropBeatPulse,
+      pulsePhase: this.backdropTime,
+      transitionState: this.transitionState,
+      endingProgress: this.endingProgress,
+      endingIntensity: this.endingIntensity,
+      bounds: this.bounds,
+    } satisfies BackdropRuntimeInputs);
+
+    const alpha = clamp(interpolationAlpha, 0, 1);
+    for (const object of this.objects) {
+      const renderX = object.previousPosition.x + (object.position.x - object.previousPosition.x) * alpha;
+      const renderY = object.previousPosition.y + (object.position.y - object.previousPosition.y) * alpha;
+      object.mesh.position.set(renderX, renderY, 0);
+      object.coreMesh.position.set(renderX, renderY, -0.06);
+    }
 
     this.scene.render();
   }
@@ -435,7 +490,10 @@ export class World {
     };
 
     this.applyCameraFrame();
-    this.resizeBackdrop();
+    if (this.activeLegacyBackdropId === "brutalist-club") {
+      this.resizeBackdrop();
+    }
+    this.backdropInstance?.resize(this.bounds);
 
     this.rebuildBaseSurfaces();
     this.setPlayerX(this.playerX);
@@ -443,9 +501,10 @@ export class World {
 
   dispose(): void {
     for (const object of this.objects) {
-      object.mesh.dispose();
-      object.coreMesh.dispose();
+      this.releaseBallVisual(object.mesh, object.coreMesh);
+      this.releaseObject(object);
     }
+    this.objectById.clear();
 
     for (const surface of this.baseSurfaces) {
       surface.mesh?.dispose();
@@ -454,23 +513,33 @@ export class World {
     this.playerMesh.dispose();
     this.playerSurface.mesh?.dispose();
     this.pulses.forEach((pulse) => pulse.mesh.dispose());
+    this.ballVisualPool.forEach((visual) => {
+      visual.outer.dispose();
+      visual.core.dispose();
+    });
+    this.backdropInstance?.dispose();
     this.scene.dispose();
     this.engine.dispose();
   }
 
   reset(): void {
     for (const object of this.objects) {
-      object.mesh.dispose();
-      object.coreMesh.dispose();
+      this.releaseBallVisual(object.mesh, object.coreMesh);
+      this.releaseObject(object);
     }
+    this.objectById.clear();
 
     this.objects = [];
     this.nextObjectId = 0;
-    this.pulses.forEach((pulse) => pulse.mesh.dispose());
-    this.pulses = [];
+    for (const pulse of this.pulses) {
+      pulse.active = false;
+      pulse.mesh.setEnabled(false);
+    }
     this.transitionState = { kind: "none" };
     this.endingProgress = 0;
     this.endingIntensity = 0;
+    this.backdropGrooveLevel = 1;
+    this.backdropTotalGrooveLevels = 1;
   }
 
   setPlayerX(x: number): void {
@@ -479,8 +548,10 @@ export class World {
     const halfWidth = this.playerWidth * 0.5;
     const y = GAME_CONFIG.playerY;
 
-    this.playerSurface.a = new Vector2(this.playerX - halfWidth, y);
-    this.playerSurface.b = new Vector2(this.playerX + halfWidth, y);
+    this.playerSurface.a.x = this.playerX - halfWidth;
+    this.playerSurface.a.y = y;
+    this.playerSurface.b.x = this.playerX + halfWidth;
+    this.playerSurface.b.y = y;
     this.updateSurfaceMesh(this.playerSurface, 0.34);
 
     this.playerMesh.position.x = this.playerX;
@@ -490,6 +561,11 @@ export class World {
   setCameraBeatPulse(pulse: number, grooveIntensity: number): void {
     this.backdropBeatPulse = clamp(pulse, 0, 1);
     this.backdropGrooveIntensity = clamp(grooveIntensity, 0, 1);
+  }
+
+  setBackdropGrooveState(grooveLevel: number, totalGrooveLevels: number): void {
+    this.backdropGrooveLevel = Math.max(1, grooveLevel);
+    this.backdropTotalGrooveLevels = Math.max(1, totalGrooveLevels);
   }
 
   setEndingState(progress: number, intensity: number): void {
@@ -519,72 +595,59 @@ export class World {
     formationColor?: string,
   ): MusicalObject | null {
     const definition = OBJECT_DEFINITIONS[type];
-    const materialSet = this.objectMaterials.get(type);
     const radius = definition.radius * this.getResponsiveObjectScale();
-
-    if (!materialSet) {
-      return null;
-    }
-
-    const outerMaterial =
-      type === "mega"
-        ? this.createFlatMaterial(`mega-${this.nextObjectId}-outer`, definition.color)
-        : formationColor
-          ? this.createFlatMaterial(`special-${this.nextObjectId}-outer`, formationColor)
-          : this.createFlatMaterial(`${type}-${this.nextObjectId}-outer`, definition.color);
-    const innerMaterial =
-      type === "mega"
-        ? this.createFlatMaterial(`mega-${this.nextObjectId}-core`, definition.glowColor)
-        : formationColor
-          ? this.createFlatMaterial(`special-${this.nextObjectId}-core`, "#fff9dc")
-          : this.createFlatMaterial(`${type}-${this.nextObjectId}-core`, definition.glowColor);
-
-    const visual = this.createSignalBallVisual(
-      `object-${this.nextObjectId}`,
-      radius,
-      outerMaterial,
-      innerMaterial,
-      type === "solo" ? "solo" : "default",
-    );
+    const visual = this.acquireBallVisual(type === "solo" ? "solo" : "default");
     const mesh = visual.outer;
     const coreMesh = visual.core;
+    mesh.setEnabled(true);
+    coreMesh.setEnabled(true);
 
-    const object: MusicalObject = {
-      id: this.nextObjectId += 1,
-      type,
-      noteFamily: definition.noteFamily,
-      specialFormationId,
-      specialCaught: false,
-      soloCaught: false,
-      position: new Vector2(
-        clamp(x, this.bounds.left + 1.6, this.bounds.right - 1.6),
-        this.bounds.top - 0.8 + Math.random() * 0.6,
-      ),
-      velocity: new Vector2(
-        velocityX ?? (Math.random() - 0.5) * 2.6,
-        velocityY ?? (-1.5 - Math.random() * 1.4),
-      ),
-      radius,
-      bounce: definition.bounce,
-      mass: definition.mass,
-      color: definition.color,
-      glowColor: definition.glowColor,
-      noteRange: definition.noteRange,
-      cooldown: definition.cooldown,
-      gravityScale: definition.gravityScale,
-      pulse: 0,
-      age: 0,
-      trailTimer: type === "mega" ? 0.02 : 0,
-      mesh,
-      coreMesh,
-    };
+    const spawnX = clamp(x, this.bounds.left + 1.6, this.bounds.right - 1.6);
+    const spawnY = this.bounds.top - 0.8 + Math.random() * 0.6;
+    const outerColor = formationColor ?? definition.color;
+    const innerColor = formationColor ? "#fff9dc" : definition.glowColor;
+    this.tintMeshMaterials(mesh, outerColor);
+    this.tintMeshMaterials(coreMesh, innerColor);
+
+    const object = this.acquireObject();
+    object.id = this.nextObjectId += 1;
+    object.type = type;
+    object.noteFamily = definition.noteFamily;
+    object.specialFormationId = specialFormationId;
+    object.specialCaught = false;
+    object.soloCaught = false;
+    object.previousPosition.x = spawnX;
+    object.previousPosition.y = spawnY;
+    object.position.x = spawnX;
+    object.position.y = spawnY;
+    object.velocity.x = velocityX ?? (Math.random() - 0.5) * 2.6;
+    object.velocity.y = velocityY ?? (-1.5 - Math.random() * 1.4);
+    object.radius = radius;
+    object.bounce = definition.bounce;
+    object.mass = definition.mass;
+    object.color = outerColor;
+    object.glowColor = innerColor;
+    object.visualScale = radius;
+    object.noteRange = definition.noteRange;
+    object.cooldown = definition.cooldown;
+    object.gravityScale = definition.gravityScale;
+    object.pulse = 0;
+    object.age = 0;
+    object.trailTimer = type === "mega" ? 0.02 : 0;
+    object.mesh = mesh;
+    object.coreMesh = coreMesh;
 
     this.objects.push(object);
+    this.objectById.set(object.id, object);
+    object.mesh.position.set(object.position.x, object.position.y, 0);
+    object.coreMesh.position.set(object.position.x, object.position.y, -0.06);
+    object.mesh.scaling.setAll(radius);
+    object.coreMesh.scaling.setAll(radius);
     return object;
   }
 
   markSpecialCaught(objectId: number): void {
-    const object = this.objects.find((candidate) => candidate.id === objectId);
+    const object = this.objectById.get(objectId);
 
     if (!object || object.specialCaught) {
       return;
@@ -598,7 +661,7 @@ export class World {
   }
 
   markSoloCaught(objectId: number): void {
-    const object = this.objects.find((candidate) => candidate.id === objectId);
+    const object = this.objectById.get(objectId);
 
     if (!object || object.soloCaught) {
       return;
@@ -622,42 +685,43 @@ export class World {
     ) => void,
     onObjectRemoved?: (object: MusicalObject) => void,
   ): void {
-    const surfaces = [...this.baseSurfaces, this.playerSurface];
     const substeps = Math.max(1, Math.min(5, Math.ceil(deltaTime / (1 / 120))));
     const stepDeltaTime = deltaTime / substeps;
 
     for (const pulse of this.pulses) {
+      if (!pulse.active) {
+        continue;
+      }
       pulse.age += deltaTime;
       const progress = pulse.age / pulse.lifetime;
-      const scale = pulse.startScale + (pulse.endScale - pulse.startScale) * progress;
+      const scale = pulse.baseRadius * (pulse.startScale + (pulse.endScale - pulse.startScale) * progress);
       pulse.mesh.scaling.setAll(scale);
       pulse.material.alpha = Math.max(
         0,
         pulse.startAlpha + (pulse.endAlpha - pulse.startAlpha) * progress,
       );
-    }
-
-    this.pulses = this.pulses.filter((pulse) => {
       if (pulse.age >= pulse.lifetime) {
-        pulse.mesh.dispose();
-        return false;
+        pulse.active = false;
+        pulse.mesh.setEnabled(false);
       }
-
-      return true;
-    });
+    }
 
     for (let step = 0; step < substeps; step += 1) {
       for (const object of this.objects) {
+        object.previousPosition.x = object.position.x;
+        object.previousPosition.y = object.position.y;
         object.cooldown = Math.max(0, object.cooldown - stepDeltaTime);
         object.pulse = Math.max(0, object.pulse - stepDeltaTime * 3.6);
         object.age += stepDeltaTime;
         object.trailTimer = Math.max(0, object.trailTimer - stepDeltaTime);
-        const previousPosition = object.position.clone();
+        this.previousPositionScratch.x = object.position.x;
+        this.previousPositionScratch.y = object.position.y;
 
         object.velocity.y -= GAME_CONFIG.gravity * object.gravityScale * stepDeltaTime;
         object.velocity.x *= 1 - GAME_CONFIG.airDrag * stepDeltaTime * 60;
         object.velocity.y *= GAME_CONFIG.damping;
-        object.position.addInPlace(object.velocity.scale(stepDeltaTime));
+        object.position.x += object.velocity.x * stepDeltaTime;
+        object.position.y += object.velocity.y * stepDeltaTime;
 
         if (object.type === "mega") {
           this.updateMegaAppearance(object);
@@ -668,31 +732,79 @@ export class World {
           }
         }
 
-        for (const surface of surfaces) {
-          this.resolveSurfaceCollision(object, previousPosition, surface, onSurfaceImpact);
+        for (const surface of this.baseSurfaces) {
+          this.resolveSurfaceCollision(object, this.previousPositionScratch, surface, onSurfaceImpact);
         }
+        this.resolveSurfaceCollision(object, this.previousPositionScratch, this.playerSurface, onSurfaceImpact);
       }
       this.resolveObjectCollisions(onPairImpact);
     }
 
     for (const object of this.objects) {
-      const scale = 1 + object.pulse * 0.22;
-      object.mesh.position.set(object.position.x, object.position.y, 0);
-      object.coreMesh.position.set(object.position.x, object.position.y, -0.06);
-      object.mesh.scaling.set(scale, scale, 1);
-      object.coreMesh.scaling.set(1 - object.pulse * 0.12, 1 - object.pulse * 0.12, 1);
+      const scale = object.visualScale * (1 + object.pulse * 0.22);
+      const coreScale = object.visualScale * (1 - object.pulse * 0.12);
+      object.mesh.scaling.setAll(scale);
+      object.coreMesh.scaling.setAll(coreScale);
     }
 
-    this.objects = this.objects.filter((object) => {
+    let activeObjectCount = 0;
+    for (const object of this.objects) {
       if (object.position.y >= this.bounds.bottom - 2.4) {
-        return true;
+        this.objects[activeObjectCount] = object;
+        activeObjectCount += 1;
+        continue;
       }
 
       onObjectRemoved?.(object);
-      object.mesh.dispose();
-      object.coreMesh.dispose();
-      return false;
-    });
+      this.objectById.delete(object.id);
+      this.releaseBallVisual(object.mesh, object.coreMesh);
+      this.releaseObject(object);
+    }
+    this.objects.length = activeObjectCount;
+  }
+
+  private acquireObject(): MusicalObject {
+    const pooled = this.objectPool.pop();
+    if (pooled) {
+      return pooled;
+    }
+
+    return {
+      id: 0,
+      type: "bell",
+      noteFamily: "bell",
+      specialFormationId: undefined,
+      specialCaught: false,
+      soloCaught: false,
+      previousPosition: new Vector2(0, 0),
+      position: new Vector2(0, 0),
+      velocity: new Vector2(0, 0),
+      radius: 0,
+      bounce: 0,
+      mass: 1,
+      color: "#ffffff",
+      glowColor: "#ffffff",
+      visualScale: 1,
+      noteRange: [60, 72],
+      cooldown: 0,
+      gravityScale: 1,
+      pulse: 0,
+      age: 0,
+      trailTimer: 0,
+      mesh: null as unknown as Mesh,
+      coreMesh: null as unknown as Mesh,
+    };
+  }
+
+  private releaseObject(object: MusicalObject): void {
+    object.specialFormationId = undefined;
+    object.specialCaught = false;
+    object.soloCaught = false;
+    object.cooldown = 0;
+    object.pulse = 0;
+    object.age = 0;
+    object.trailTimer = 0;
+    this.objectPool.push(object);
   }
 
   worldToScreen(x: number, y: number): { x: number; y: number } {
@@ -900,60 +1012,12 @@ export class World {
   }
 
   private createPlayfieldDecor(): void {
-    const rails: Mesh[] = [];
-    const railMaterials: StandardMaterial[] = [];
     const centerTicks: Mesh[] = [];
     const centerTickMaterials: StandardMaterial[] = [];
     const radialRings: Mesh[] = [];
     const radialMaterials: StandardMaterial[] = [];
     const lowerGuides: Mesh[] = [];
     const lowerGuideMaterials: StandardMaterial[] = [];
-
-    for (const direction of [-1, 1]) {
-      const outerRail = MeshBuilder.CreatePlane(`playfield-outer-rail-${direction}`, {
-        width: 0.2,
-        height: 14.6,
-      }, this.scene);
-      const outerRailMaterial = this.createFlatMaterial(
-        `playfield-outer-rail-material-${direction}`,
-        PLAYFIELD_RAIL_DIM,
-        0.34,
-      );
-      outerRail.material = outerRailMaterial;
-      outerRail.position.set(direction * 11.9, 0.2, 1.6);
-      rails.push(outerRail);
-      railMaterials.push(outerRailMaterial);
-
-      const innerRail = MeshBuilder.CreatePlane(`playfield-inner-rail-${direction}`, {
-        width: 0.08,
-        height: 14.2,
-      }, this.scene);
-      const innerRailMaterial = this.createFlatMaterial(
-        `playfield-inner-rail-material-${direction}`,
-        PLAYFIELD_RAIL_COLOR,
-        0.74,
-      );
-      innerRail.material = innerRailMaterial;
-      innerRail.position.set(direction * 11.5, 0.2, 1.56);
-      rails.push(innerRail);
-      railMaterials.push(innerRailMaterial);
-
-      for (let index = 0; index < 5; index += 1) {
-        const tick = MeshBuilder.CreatePlane(`playfield-rail-tick-${direction}-${index}`, {
-          width: 0.24,
-          height: 0.05,
-        }, this.scene);
-        const tickMaterial = this.createFlatMaterial(
-          `playfield-rail-tick-material-${direction}-${index}`,
-          index === 2 ? PLAYFIELD_WARN_COLOR : PLAYFIELD_GUIDE_COLOR,
-          0.42,
-        );
-        tick.material = tickMaterial;
-        tick.position.set(direction * 11.02, 4.6 - index * 2.3, 1.52);
-        rails.push(tick);
-        railMaterials.push(tickMaterial);
-      }
-    }
 
     const centerline = MeshBuilder.CreatePlane("playfield-centerline", {
       width: 0.03,
@@ -1017,8 +1081,6 @@ export class World {
     }
 
     this.playfieldDecor = {
-      rails,
-      railMaterials,
       centerline,
       centerlineMaterial,
       centerTicks,
@@ -1092,14 +1154,6 @@ export class World {
     const buildLift = this.transitionState.kind === "grooveBuild" ? this.transitionState.intensity * 0.18 : 0;
     const landingLift = this.transitionState.kind === "grooveLanding" ? this.transitionState.intensity * 0.54 : 0;
     const powerDown = 1 - this.endingIntensity * 0.36;
-    const grooveLift = 0.22 + groove * 0.38;
-
-    this.playfieldDecor.railMaterials.forEach((material, index) => {
-      const accent = index % 7 === 0 ? 0.18 : 0.08;
-      const baseAlpha = index % 7 === 1 ? 0.78 : index % 7 === 0 ? 0.48 : 0.34;
-      material.alpha = clamp((baseAlpha + groove * 0.12 + beat * accent + buildLift * 0.08 + landingLift * 0.18) * powerDown, 0.1, 0.96);
-      material.emissiveColor = material.diffuseColor.scale((0.42 + grooveLift + beat * (accent + 0.06) + buildLift * 0.24 + landingLift * 0.52) * powerDown);
-    });
 
     this.playfieldDecor.centerlineMaterial.alpha = (0.24 + groove * 0.14 + beat * 0.1 + buildLift * 0.08 + landingLift * 0.22) * powerDown;
     this.playfieldDecor.centerlineMaterial.emissiveColor = this.playfieldDecor.centerlineMaterial.diffuseColor.scale(
@@ -1381,6 +1435,45 @@ export class World {
     return { outer, core };
   }
 
+  private acquireBallVisual(variant: "default" | "solo"): { outer: Mesh; core: Mesh } {
+    let pooled = this.ballVisualPool.find((candidate) => !candidate.active && candidate.variant === variant);
+
+    if (!pooled) {
+      const created = this.createSignalBallVisual(
+        `pooled-object-${this.ballVisualPool.length}`,
+        1,
+        this.createFlatMaterial(`pooled-${this.ballVisualPool.length}-outer`, "#ffffff", 1),
+        this.createFlatMaterial(`pooled-${this.ballVisualPool.length}-core`, "#f2f8ff", 1),
+        variant,
+      );
+      pooled = {
+        outer: created.outer,
+        core: created.core,
+        variant,
+        active: false,
+      };
+      pooled.outer.setEnabled(false);
+      pooled.core.setEnabled(false);
+      this.ballVisualPool.push(pooled);
+    }
+
+    pooled.active = true;
+    return { outer: pooled.outer, core: pooled.core };
+  }
+
+  private releaseBallVisual(outer: Mesh, core: Mesh): void {
+    const pooled = this.ballVisualPool.find((candidate) => candidate.outer === outer && candidate.core === core);
+    if (!pooled) {
+      outer.dispose();
+      core.dispose();
+      return;
+    }
+
+    pooled.active = false;
+    pooled.outer.setEnabled(false);
+    pooled.core.setEnabled(false);
+  }
+
   private rebuildBaseSurfaces(): void {
     for (const surface of this.baseSurfaces) {
       surface.mesh?.dispose();
@@ -1466,44 +1559,33 @@ export class World {
     }
 
     const penetration = object.radius - sweptHit.distance + 0.001;
-    object.position = sweptHit.position.add(sweptHit.normal.scale(penetration));
+    object.position.x = sweptHit.positionX + sweptHit.normalX * penetration;
+    object.position.y = sweptHit.positionY + sweptHit.normalY * penetration;
 
-    const velocityAlongNormal = Vector2.Dot(object.velocity, sweptHit.normal);
+    const velocityAlongNormal = object.velocity.x * sweptHit.normalX + object.velocity.y * sweptHit.normalY;
 
     if (velocityAlongNormal >= 0) {
       return;
     }
 
-    const tangent = new Vector2(-sweptHit.normal.y, sweptHit.normal.x);
-    const tangentVelocity = Vector2.Dot(object.velocity, tangent);
+    const tangentX = -sweptHit.normalY;
+    const tangentY = sweptHit.normalX;
+    const tangentVelocity = object.velocity.x * tangentX + object.velocity.y * tangentY;
     const restitution =
       object.type === "mega"
         ? Math.min(1.08, object.bounce * surface.bounce + 0.1)
         : Math.min(0.98, object.bounce * surface.bounce);
-    object.velocity = object.velocity.subtract(
-      sweptHit.normal.scale((1 + restitution) * velocityAlongNormal),
-    );
-    object.velocity = object.velocity.subtract(tangent.scale(tangentVelocity * 0.025));
+    object.velocity.x -= sweptHit.normalX * ((1 + restitution) * velocityAlongNormal);
+    object.velocity.y -= sweptHit.normalY * ((1 + restitution) * velocityAlongNormal);
+    object.velocity.x -= tangentX * (tangentVelocity * 0.025);
+    object.velocity.y -= tangentY * (tangentVelocity * 0.025);
 
     const impact = -velocityAlongNormal;
-    if (object.type === "solo" && SOLO_DEBUG) {
-      console.debug("[SoloDebug] surface collision", {
-        objectId: object.id,
-        surface: surface.kind,
-        impact,
-        cooldown: object.cooldown,
-        threshold: GAME_CONFIG.surfaceCollisionThreshold,
-        willTrigger:
-          surface.musical &&
-          object.cooldown <= 0 &&
-          impact >= GAME_CONFIG.surfaceCollisionThreshold,
-      });
-    }
     if (surface.musical && object.cooldown <= 0 && impact >= GAME_CONFIG.surfaceCollisionThreshold) {
       object.cooldown = OBJECT_DEFINITIONS[object.type].cooldown;
       object.pulse = Math.min(1, object.pulse + impact * 0.045);
-      this.createPulse(sweptHit.closest.x, sweptHit.closest.y, object.color, impact);
-      onImpact(object, surface, sweptHit.closest.x, sweptHit.closest.y, impact);
+      this.createPulse(sweptHit.closestX, sweptHit.closestY, object.color, impact);
+      onImpact(object, surface, sweptHit.closestX, sweptHit.closestY, impact);
     }
   }
 
@@ -1511,19 +1593,56 @@ export class World {
     position: Vector2,
     radius: number,
     surface: Surface,
-  ): { position: Vector2; closest: Vector2; normal: Vector2; distance: number } | null {
-    const closest = closestPointOnSegment(position, surface.a, surface.b);
-    const delta = position.subtract(closest);
-    const distance = delta.length();
+  ): SurfaceHit | null {
+    const segmentX = surface.b.x - surface.a.x;
+    const segmentY = surface.b.y - surface.a.y;
+    const segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
+
+    let closestX = surface.a.x;
+    let closestY = surface.a.y;
+
+    if (segmentLengthSquared > 0) {
+      const pointOffsetX = position.x - surface.a.x;
+      const pointOffsetY = position.y - surface.a.y;
+      const t = clamp(
+        (pointOffsetX * segmentX + pointOffsetY * segmentY) / segmentLengthSquared,
+        0,
+        1,
+      );
+      closestX = surface.a.x + segmentX * t;
+      closestY = surface.a.y + segmentY * t;
+    }
+
+    const deltaX = position.x - closestX;
+    const deltaY = position.y - closestY;
+    const distance = Math.hypot(deltaX, deltaY);
 
     if (distance >= radius) {
       return null;
     }
 
+    let normalX: number;
+    let normalY: number;
+
+    if (distance > 0.0001) {
+      const inverseDistance = 1 / distance;
+      normalX = deltaX * inverseDistance;
+      normalY = deltaY * inverseDistance;
+    } else {
+      const surfaceDeltaX = surface.b.x - surface.a.x;
+      const surfaceDeltaY = surface.b.y - surface.a.y;
+      const surfaceLength = Math.hypot(surfaceDeltaX, surfaceDeltaY) || 1;
+      normalX = -surfaceDeltaY / surfaceLength;
+      normalY = surfaceDeltaX / surfaceLength;
+    }
+
     return {
-      position: position.clone(),
-      closest,
-      normal: distance > 0.0001 ? delta.scale(1 / distance) : segmentNormal(surface.a, surface.b),
+      positionX: position.x,
+      positionY: position.y,
+      closestX,
+      closestY,
+      normalX,
+      normalY,
       distance,
     };
   }
@@ -1533,7 +1652,7 @@ export class World {
     currentPosition: Vector2,
     radius: number,
     surface: Surface,
-  ): { position: Vector2; closest: Vector2; normal: Vector2; distance: number } | null {
+  ): SurfaceHit | null {
     const lineCrossingHit = this.getLineCrossingHit(previousPosition, currentPosition, radius, surface);
 
     if (lineCrossingHit) {
@@ -1553,7 +1672,9 @@ export class World {
 
     for (let sampleIndex = 1; sampleIndex <= sampleCount; sampleIndex += 1) {
       const sampleT = sampleIndex / sampleCount;
-      const samplePosition = lerpVector2(previousPosition, currentPosition, sampleT);
+      const samplePosition = this.previousPositionScratch;
+      samplePosition.x = previousPosition.x + (currentPosition.x - previousPosition.x) * sampleT;
+      samplePosition.y = previousPosition.y + (currentPosition.y - previousPosition.y) * sampleT;
       const overlap = this.getSurfaceOverlap(samplePosition, radius, surface);
 
       if (overlap) {
@@ -1570,7 +1691,9 @@ export class World {
 
     for (let iteration = 0; iteration < 7; iteration += 1) {
       const midT = (lowT + highT) * 0.5;
-      const midPosition = lerpVector2(previousPosition, currentPosition, midT);
+      const midPosition = this.previousPositionScratch;
+      midPosition.x = previousPosition.x + (currentPosition.x - previousPosition.x) * midT;
+      midPosition.y = previousPosition.y + (currentPosition.y - previousPosition.y) * midT;
       const overlap = this.getSurfaceOverlap(midPosition, radius, surface);
 
       if (overlap) {
@@ -1580,7 +1703,9 @@ export class World {
       }
     }
 
-    return this.getSurfaceOverlap(lerpVector2(previousPosition, currentPosition, highT), radius, surface);
+    this.previousPositionScratch.x = previousPosition.x + (currentPosition.x - previousPosition.x) * highT;
+    this.previousPositionScratch.y = previousPosition.y + (currentPosition.y - previousPosition.y) * highT;
+    return this.getSurfaceOverlap(this.previousPositionScratch, radius, surface);
   }
 
   private getLineCrossingHit(
@@ -1588,10 +1713,16 @@ export class World {
     currentPosition: Vector2,
     radius: number,
     surface: Surface,
-  ): { position: Vector2; closest: Vector2; normal: Vector2; distance: number } | null {
-    const normal = segmentNormal(surface.a, surface.b);
-    const previousDistance = Vector2.Dot(previousPosition.subtract(surface.a), normal);
-    const currentDistance = Vector2.Dot(currentPosition.subtract(surface.a), normal);
+  ): SurfaceHit | null {
+    const surfaceDeltaX = surface.b.x - surface.a.x;
+    const surfaceDeltaY = surface.b.y - surface.a.y;
+    const surfaceLength = Math.hypot(surfaceDeltaX, surfaceDeltaY) || 1;
+    const normalX = -surfaceDeltaY / surfaceLength;
+    const normalY = surfaceDeltaX / surfaceLength;
+    const previousDistance =
+      (previousPosition.x - surface.a.x) * normalX + (previousPosition.y - surface.a.y) * normalY;
+    const currentDistance =
+      (currentPosition.x - surface.a.x) * normalX + (currentPosition.y - surface.a.y) * normalY;
 
     if (previousDistance <= radius || currentDistance > radius) {
       return null;
@@ -1604,20 +1735,25 @@ export class World {
     }
 
     const hitT = clamp((previousDistance - radius) / distanceDelta, 0, 1);
-    const hitPosition = lerpVector2(previousPosition, currentPosition, hitT);
-    const closest = hitPosition.subtract(normal.scale(radius));
-    const direction = segmentDirection(surface.a, surface.b);
-    const projectedDistance = Vector2.Dot(closest.subtract(surface.a), direction);
-    const segmentLength = Vector2.Distance(surface.a, surface.b);
+    const hitPositionX = previousPosition.x + (currentPosition.x - previousPosition.x) * hitT;
+    const hitPositionY = previousPosition.y + (currentPosition.y - previousPosition.y) * hitT;
+    const closestX = hitPositionX - normalX * radius;
+    const closestY = hitPositionY - normalY * radius;
+    const projectedDistance =
+      ((closestX - surface.a.x) * surfaceDeltaX + (closestY - surface.a.y) * surfaceDeltaY) / surfaceLength;
+    const segmentLength = surfaceLength;
 
     if (projectedDistance < -radius || projectedDistance > segmentLength + radius) {
       return null;
     }
 
     return {
-      position: hitPosition,
-      closest,
-      normal,
+      positionX: hitPositionX,
+      positionY: hitPositionY,
+      closestX,
+      closestY,
+      normalX,
+      normalY,
       distance: radius,
     };
   }
@@ -1636,22 +1772,28 @@ export class World {
 
       for (let j = i + 1; j < this.objects.length; j += 1) {
         const b = this.objects[j];
-        const delta = b.position.subtract(a.position);
-        const distance = delta.length();
+        const deltaX = b.position.x - a.position.x;
+        const deltaY = b.position.y - a.position.y;
+        const distance = Math.hypot(deltaX, deltaY);
         const minDistance = a.radius + b.radius;
 
         if (distance >= minDistance) {
           continue;
         }
 
-        const normal = distance > 0.0001 ? delta.scale(1 / distance) : new Vector2(1, 0);
+        const normalX = distance > 0.0001 ? deltaX / distance : 1;
+        const normalY = distance > 0.0001 ? deltaY / distance : 0;
         const penetration = minDistance - distance + 0.0005;
-        const correction = normal.scale(penetration * 0.5);
-        a.position.addInPlace(correction.scale(-1));
-        b.position.addInPlace(correction);
+        const correctionX = normalX * penetration * 0.5;
+        const correctionY = normalY * penetration * 0.5;
+        a.position.x -= correctionX;
+        a.position.y -= correctionY;
+        b.position.x += correctionX;
+        b.position.y += correctionY;
 
-        const relativeVelocity = b.velocity.subtract(a.velocity);
-        const speedAlongNormal = Vector2.Dot(relativeVelocity, normal);
+        const relativeVelocityX = b.velocity.x - a.velocity.x;
+        const relativeVelocityY = b.velocity.y - a.velocity.y;
+        const speedAlongNormal = relativeVelocityX * normalX + relativeVelocityY * normalY;
 
         if (speedAlongNormal >= 0) {
           continue;
@@ -1663,9 +1805,12 @@ export class World {
             : Math.min(a.bounce, b.bounce) * 0.86;
         const impulse =
           (-(1 + restitution) * speedAlongNormal) / ((1 / a.mass) + (1 / b.mass));
-        const impulseVector = normal.scale(impulse);
-        a.velocity = a.velocity.subtract(impulseVector.scale(1 / a.mass));
-        b.velocity = b.velocity.add(impulseVector.scale(1 / b.mass));
+        const impulseX = normalX * impulse;
+        const impulseY = normalY * impulse;
+        a.velocity.x -= impulseX / a.mass;
+        a.velocity.y -= impulseY / a.mass;
+        b.velocity.x += impulseX / b.mass;
+        b.velocity.y += impulseY / b.mass;
 
         const impact = -speedAlongNormal;
         const source = a.noteRange[1] >= b.noteRange[1] ? a : b;
@@ -1674,9 +1819,10 @@ export class World {
         if (impact >= GAME_CONFIG.objectCollisionThreshold && source.cooldown <= 0) {
           source.cooldown = Math.max(source.cooldown, 0.08);
           source.pulse = Math.min(1, source.pulse + impact * 0.04);
-          const center = a.position.add(b.position).scale(0.5);
-          this.createPulse(center.x, center.y, source.color, impact * 0.75);
-          onPairImpact(source, other, center.x, center.y, impact * 0.7);
+          const centerX = (a.position.x + b.position.x) * 0.5;
+          const centerY = (a.position.y + b.position.y) * 0.5;
+          this.createPulse(centerX, centerY, source.color, impact * 0.75);
+          onPairImpact(source, other, centerX, centerY, impact * 0.7);
         }
       }
     }
@@ -1763,53 +1909,100 @@ export class World {
       return;
     }
 
-    const delta = surface.b.subtract(surface.a);
-    const length = delta.length();
-    const midpoint = surface.a.add(surface.b).scale(0.5);
+    const deltaX = surface.b.x - surface.a.x;
+    const deltaY = surface.b.y - surface.a.y;
+    const length = Math.hypot(deltaX, deltaY);
+    const midpointX = (surface.a.x + surface.b.x) * 0.5;
+    const midpointY = (surface.a.y + surface.b.y) * 0.5;
 
-    mesh.position.set(midpoint.x, midpoint.y, 0.2);
+    mesh.position.set(midpointX, midpointY, 0.2);
     mesh.scaling.set(length, thickness, 1);
-    mesh.rotation.z = Math.atan2(delta.y, delta.x);
+    mesh.rotation.z = Math.atan2(deltaY, deltaX);
   }
 
   private createPulse(x: number, y: number, color: string, impact: number): void {
-    const mesh = MeshBuilder.CreateDisc(`pulse-${this.pulses.length}`, {
-      radius: 0.42 + impact * 0.02,
-      tessellation: 30,
-    }, this.scene);
-    const material = this.createFlatMaterial(`pulse-material-${this.pulses.length}`, color, 0.48);
-    mesh.material = material;
-    mesh.position.set(x, y, 0.34);
-    this.pulses.push({
-      mesh,
-      material,
-      age: 0,
-      lifetime: 0.34,
-      startScale: 1,
-      endScale: 2.8,
-      startAlpha: 0.48,
-      endAlpha: 0,
-    });
+    this.activatePulseEffect(
+      x,
+      y,
+      color,
+      0.34,
+      0.42 + impact * 0.02,
+      30,
+      1,
+      2.8,
+      0.48,
+      0,
+      0.34,
+    );
   }
 
   private createMegaTrail(x: number, y: number, color: string): void {
-    const mesh = MeshBuilder.CreateDisc(`mega-trail-${this.pulses.length}`, {
-      radius: 0.2,
-      tessellation: 22,
-    }, this.scene);
-    const material = this.createFlatMaterial(`mega-trail-material-${this.pulses.length}`, color, 0.26);
-    mesh.material = material;
-    mesh.position.set(x, y, 0.12);
-    this.pulses.push({
-      mesh,
-      material,
-      age: 0,
-      lifetime: 0.26,
-      startScale: 1,
-      endScale: 1.85,
-      startAlpha: 0.24,
-      endAlpha: 0,
-    });
+    this.activatePulseEffect(
+      x,
+      y,
+      color,
+      0.12,
+      0.2,
+      22,
+      1,
+      1.85,
+      0.24,
+      0,
+      0.26,
+    );
+  }
+
+  private activatePulseEffect(
+    x: number,
+    y: number,
+    color: string,
+    z: number,
+    radius: number,
+    tessellation: number,
+    startScale: number,
+    endScale: number,
+    startAlpha: number,
+    endAlpha: number,
+    lifetime: number,
+  ): void {
+    let pulse = this.pulses.find((candidate) => !candidate.active);
+
+    if (!pulse) {
+      const mesh = MeshBuilder.CreateDisc(`pulse-${this.pulses.length}`, {
+        radius: 1,
+        tessellation,
+      }, this.scene);
+      const material = this.createFlatMaterial(`pulse-material-${this.pulses.length}`, color, startAlpha);
+      mesh.material = material;
+      pulse = {
+        active: false,
+        mesh,
+        material,
+        baseRadius: radius,
+        age: 0,
+        lifetime,
+        startScale,
+        endScale,
+        startAlpha,
+        endAlpha,
+      };
+      this.pulses.push(pulse);
+    }
+
+    pulse.active = true;
+    pulse.age = 0;
+    pulse.baseRadius = radius;
+    pulse.lifetime = lifetime;
+    pulse.startScale = startScale;
+    pulse.endScale = endScale;
+    pulse.startAlpha = startAlpha;
+    pulse.endAlpha = endAlpha;
+    pulse.material.diffuseColor = hex(color);
+    pulse.material.emissiveColor = hex(color).scale(0.08);
+    pulse.material.alpha = startAlpha;
+    pulse.mesh.scaling.setAll(radius * startScale);
+    pulse.mesh.position.set(x, y, z);
+    pulse.mesh.setEnabled(true);
   }
 
   private updateMegaAppearance(object: MusicalObject): void {

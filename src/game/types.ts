@@ -54,6 +54,7 @@ export interface MusicalObject {
   specialFormationId?: string;
   specialCaught?: boolean;
   soloCaught?: boolean;
+  previousPosition: Vector2;
   position: Vector2;
   velocity: Vector2;
   radius: number;
@@ -61,6 +62,7 @@ export interface MusicalObject {
   mass: number;
   color: string;
   glowColor: string;
+  visualScale: number;
   noteRange: [number, number];
   cooldown: number;
   gravityScale: number;
@@ -123,4 +125,9 @@ export interface OverlayState {
   freezeSpawning: boolean;
   debugLabels: boolean;
   masterVolume: number;
+}
+
+export interface GameCompletionStats {
+  specialCatches: number;
+  longestSolo: number;
 }

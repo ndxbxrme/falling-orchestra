@@ -12,7 +12,7 @@ export const SONG9_CONFIG: SongConfig = {
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
-    { startBar: 1, lengthBars: 8, rootNote: "G", mode: "pentatonicMinor" },
+    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "pentatonicMajor" },
   ],
   impactPalette: {
     voices: {
