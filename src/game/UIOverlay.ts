@@ -263,9 +263,10 @@ export class UIOverlay {
     }
 
     this.activeBanner = true;
+    const useResponsivePosition = window.matchMedia("(pointer: coarse)").matches;
     this.persistentBanner.textContent = next.text;
-    this.persistentBanner.style.left = `${next.x}px`;
-    this.persistentBanner.style.top = `${next.y}px`;
+    this.persistentBanner.style.left = useResponsivePosition ? `${next.x}px` : "50%";
+    this.persistentBanner.style.top = useResponsivePosition ? `${next.y}px` : "50%";
     this.persistentBanner.style.color = next.color;
     this.persistentBanner.classList.remove("active");
     void this.persistentBanner.offsetWidth;

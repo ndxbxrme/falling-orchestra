@@ -1909,8 +1909,9 @@ input {
   }
 
   .formation-strip.floating {
-    top: calc(12px + env(safe-area-inset-top));
+    top: calc(92px + env(safe-area-inset-top));
     width: min(320px, calc(100vw - 24px));
+    transform: translateX(-50%);
   }
 
   .button-row {

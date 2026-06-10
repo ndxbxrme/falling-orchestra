@@ -27,7 +27,7 @@ const TRANSPORT_LOOKAHEAD = 0.16;
 const MAX_ACTIVE_IMPACT_VOICES = 36;
 const MAX_ACTIVE_MEGA_VOICES = 8;
 const DEFAULT_LOOP_BUS_GAIN = 1;
-const DEFAULT_PLAYER_BUS_GAIN = 0.62;
+const DEFAULT_PLAYER_BUS_GAIN = 0.52;
 const DEFAULT_IMPACT_PALETTE: ImpactPaletteConfig = {
   voices: {
     bell: {
