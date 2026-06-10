@@ -127,6 +127,19 @@ export interface OverlayState {
   masterVolume: number;
 }
 
+export interface MusicRuntimeSnapshot {
+  rootNote: RootNoteName;
+  mode: ScaleModeName;
+  currentGrooveLevel: number;
+  beatPulse: number;
+  transportQuarterIndex: number | null;
+  pendingGrooveBoost: { targetLevel: number; intensity: number } | null;
+  endingState: { progress: number; intensity: number } | null;
+  grooveLandingLevel: number | null;
+  grooveLandingSequence: number;
+  songCompleted: boolean;
+}
+
 export interface GameCompletionStats {
   specialCatches: number;
   longestSolo: number;

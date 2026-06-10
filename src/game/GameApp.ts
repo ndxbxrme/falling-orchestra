@@ -10,6 +10,7 @@ import { World } from "./World";
 import type {
   GameCompletionStats,
   GameSessionPhase,
+  MusicRuntimeSnapshot,
   MusicalObject,
   OverlayState,
   RootNoteName,
@@ -45,6 +46,29 @@ interface SoloModeState {
   maxConsecutiveMisses: number;
 }
 
+interface GameRuntimeState {
+  sessionPhase: GameSessionPhase;
+  paused: boolean;
+  muted: boolean;
+  liveMode: boolean;
+  hudVisible: boolean;
+  freezeSpawning: boolean;
+  debugLabels: boolean;
+  launchCountdownEndsAt: number;
+  transitionState: TransitionState;
+}
+
+interface GameplayProgressState {
+  grooveCharge: number;
+  specialFormations: Map<string, FormationProgress>;
+  activeFormationSummary: { caught: number; required: number; visible: boolean };
+  soloMode: SoloModeState;
+  activeSoloBallIds: Set<number>;
+  specialCatchCount: number;
+  currentSoloCatchCount: number;
+  longestSoloCatchCount: number;
+}
+
 interface GameAppOptions {
   songConfig: SongConfig;
   backdropPresetId?: string;
@@ -61,30 +85,45 @@ export class GameApp {
   private overlay: UIOverlay;
   private interactionRoot: HTMLDivElement;
   private playerX = 0;
-  private sessionPhase: GameSessionPhase = "idle";
-  private paused = false;
-  private muted = false;
-  private liveMode = false;
-  private hudVisible = false;
-  private freezeSpawning = false;
-  private debugLabels = false;
-  private grooveCharge = 0;
+  private runtimeState: GameRuntimeState = {
+    sessionPhase: "idle",
+    paused: false,
+    muted: false,
+    liveMode: false,
+    hudVisible: false,
+    freezeSpawning: false,
+    debugLabels: false,
+    launchCountdownEndsAt: 0,
+    transitionState: { kind: "none" },
+  };
+  private gameplayProgress: GameplayProgressState = {
+    grooveCharge: 0,
+    specialFormations: new Map<string, FormationProgress>(),
+    activeFormationSummary: { caught: 0, required: 0, visible: false },
+    soloMode: {
+      active: false,
+      consecutiveMisses: 0,
+      maxConsecutiveMisses: GAME_CONFIG.soloMaxConsecutiveMisses,
+    },
+    activeSoloBallIds: new Set<number>(),
+    specialCatchCount: 0,
+    currentSoloCatchCount: 0,
+    longestSoloCatchCount: 0,
+  };
   private grooveLevels: number[] = [];
-  private specialFormations = new Map<string, FormationProgress>();
   private lastBackdropBarIndex = -1;
   private lastFrameTime = performance.now();
   private megaComboCooldown = 0;
   private activeTouchPointerId: number | null = null;
   private touchPlayerTargetX: number | null = null;
   private onSongCompleted?: (stats: GameCompletionStats) => void;
-  private launchCountdownEndsAt = 0;
   private smoothedFrameTimeMs = 16.7;
   private smoothedFps = 60;
   private simulationAccumulator = 0;
-  private transitionState: TransitionState = { kind: "none" };
   private grooveLandingEndsAt = 0;
   private grooveLandingLevel: number | null = null;
-  private activeFormationSummary = { caught: 0, required: 0, visible: false };
+  private lastHandledGrooveLandingSequence = 0;
+  private currentMusicState: MusicRuntimeSnapshot = this.music.getRuntimeSnapshot();
   private overlayState: OverlayState = {
     sessionPhase: "idle",
     transitionState: { kind: "none" },
@@ -113,15 +152,125 @@ export class GameApp {
     debugLabels: false,
     masterVolume: 0.72,
   };
-  private soloMode: SoloModeState = {
-    active: false,
-    consecutiveMisses: 0,
-    maxConsecutiveMisses: GAME_CONFIG.soloMaxConsecutiveMisses,
-  };
-  private activeSoloBallIds = new Set<number>();
-  private specialCatchCount = 0;
-  private currentSoloCatchCount = 0;
-  private longestSoloCatchCount = 0;
+  private get sessionPhase(): GameSessionPhase {
+    return this.runtimeState.sessionPhase;
+  }
+
+  private set sessionPhase(value: GameSessionPhase) {
+    this.runtimeState.sessionPhase = value;
+  }
+
+  private get paused(): boolean {
+    return this.runtimeState.paused;
+  }
+
+  private set paused(value: boolean) {
+    this.runtimeState.paused = value;
+  }
+
+  private get muted(): boolean {
+    return this.runtimeState.muted;
+  }
+
+  private set muted(value: boolean) {
+    this.runtimeState.muted = value;
+  }
+
+  private get liveMode(): boolean {
+    return this.runtimeState.liveMode;
+  }
+
+  private set liveMode(value: boolean) {
+    this.runtimeState.liveMode = value;
+  }
+
+  private get hudVisible(): boolean {
+    return this.runtimeState.hudVisible;
+  }
+
+  private set hudVisible(value: boolean) {
+    this.runtimeState.hudVisible = value;
+  }
+
+  private get freezeSpawning(): boolean {
+    return this.runtimeState.freezeSpawning;
+  }
+
+  private set freezeSpawning(value: boolean) {
+    this.runtimeState.freezeSpawning = value;
+  }
+
+  private get debugLabels(): boolean {
+    return this.runtimeState.debugLabels;
+  }
+
+  private set debugLabels(value: boolean) {
+    this.runtimeState.debugLabels = value;
+  }
+
+  private get grooveCharge(): number {
+    return this.gameplayProgress.grooveCharge;
+  }
+
+  private set grooveCharge(value: number) {
+    this.gameplayProgress.grooveCharge = value;
+  }
+
+  private get launchCountdownEndsAt(): number {
+    return this.runtimeState.launchCountdownEndsAt;
+  }
+
+  private set launchCountdownEndsAt(value: number) {
+    this.runtimeState.launchCountdownEndsAt = value;
+  }
+
+  private get transitionState(): TransitionState {
+    return this.runtimeState.transitionState;
+  }
+
+  private set transitionState(value: TransitionState) {
+    this.runtimeState.transitionState = value;
+  }
+
+  private get specialFormations(): Map<string, FormationProgress> {
+    return this.gameplayProgress.specialFormations;
+  }
+
+  private get activeFormationSummary(): { caught: number; required: number; visible: boolean } {
+    return this.gameplayProgress.activeFormationSummary;
+  }
+
+  private get soloMode(): SoloModeState {
+    return this.gameplayProgress.soloMode;
+  }
+
+  private get activeSoloBallIds(): Set<number> {
+    return this.gameplayProgress.activeSoloBallIds;
+  }
+
+  private get specialCatchCount(): number {
+    return this.gameplayProgress.specialCatchCount;
+  }
+
+  private set specialCatchCount(value: number) {
+    this.gameplayProgress.specialCatchCount = value;
+  }
+
+  private get currentSoloCatchCount(): number {
+    return this.gameplayProgress.currentSoloCatchCount;
+  }
+
+  private set currentSoloCatchCount(value: number) {
+    this.gameplayProgress.currentSoloCatchCount = value;
+  }
+
+  private get longestSoloCatchCount(): number {
+    return this.gameplayProgress.longestSoloCatchCount;
+  }
+
+  private set longestSoloCatchCount(value: number) {
+    this.gameplayProgress.longestSoloCatchCount = value;
+  }
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -141,7 +290,8 @@ export class GameApp {
       backdropParams: options.backdropParams,
     });
     this.music.loadSong(this.songConfig);
-    this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
+    this.currentMusicState = this.music.getRuntimeSnapshot();
+    this.applySpawnProfileForLevel(this.currentMusicState.currentGrooveLevel);
 
     this.input = new InputController(
       () => {
@@ -316,19 +466,22 @@ export class GameApp {
   private tick(deltaTime: number): void {
     this.megaComboCooldown = Math.max(0, this.megaComboCooldown - deltaTime);
     this.music.update();
-    const endingState = this.music.getEndingState();
-    const pendingGrooveBoost = this.music.getPendingGrooveBoost();
-    const grooveLandingEvent = this.music.consumeGrooveLandingEvent();
-    if (grooveLandingEvent) {
-      this.applySpawnProfileForLevel(grooveLandingEvent.level);
-      this.grooveLandingLevel = grooveLandingEvent.level;
+    const musicState = this.refreshMusicState();
+    const endingState = musicState.endingState;
+    if (
+      musicState.grooveLandingLevel !== null &&
+      musicState.grooveLandingSequence > this.lastHandledGrooveLandingSequence
+    ) {
+      this.lastHandledGrooveLandingSequence = musicState.grooveLandingSequence;
+      this.applySpawnProfileForLevel(musicState.grooveLandingLevel);
+      this.grooveLandingLevel = musicState.grooveLandingLevel;
       this.grooveLandingEndsAt = performance.now() + GROOVE_LANDING_AFTERGLOW_MS;
       this.overlay.triggerGrooveLandingFlash();
-      this.overlay.showNoteLabel(`Groove ${grooveLandingEvent.level} Live`, this.canvas.clientWidth * 0.5, 84, "#c8f6ff", "banner");
+      this.overlay.showNoteLabel(`Groove ${musicState.grooveLandingLevel} Live`, this.canvas.clientWidth * 0.5, 84, "#c8f6ff", "banner");
     }
-    this.syncTransitionState(pendingGrooveBoost, endingState);
-    this.syncSongCompletionState();
-    const quarterIndex = this.music.getTransportQuarterIndex();
+    this.syncTransitionState(musicState);
+    this.syncSongCompletionState(musicState);
+    const quarterIndex = musicState.transportQuarterIndex;
     if (quarterIndex !== null) {
       this.spawner.syncTransportQuarter(quarterIndex, this.world.getObjectCount());
       const barIndex = Math.floor(quarterIndex / 4);
@@ -337,8 +490,8 @@ export class GameApp {
         this.world.setBackdropScrollDirection(this.pickBackdropDirection());
       }
     }
-    this.world.setCameraBeatPulse(this.music.getBeatPulse(), this.getGrooveIntensity());
-    this.world.setBackdropGrooveState(this.music.currentGrooveLevel, this.songConfig.grooveLevels.length);
+    this.world.setCameraBeatPulse(musicState.beatPulse, this.getGrooveIntensity(musicState.currentGrooveLevel));
+    this.world.setBackdropGrooveState(musicState.currentGrooveLevel, this.songConfig.grooveLevels.length);
     this.world.setEndingState(endingState?.progress ?? 0, endingState?.intensity ?? 0);
     this.world.setTransitionState(this.transitionState);
     if (endingState && this.soloMode.active) {
@@ -634,12 +787,13 @@ export class GameApp {
     this.transitionState = { kind: "none" };
     this.grooveLandingEndsAt = 0;
     this.grooveLandingLevel = null;
+    this.lastHandledGrooveLandingSequence = 0;
     this.activeSoloBallIds.clear();
     this.specialCatchCount = 0;
     this.currentSoloCatchCount = 0;
     this.longestSoloCatchCount = 0;
     this.music.resetGroovePlayback();
-    this.applySpawnProfileForLevel(this.music.currentGrooveLevel);
+    this.applySpawnProfileForLevel(this.refreshMusicState().currentGrooveLevel);
   }
 
   private registerSpecialObject(formationId: string, total: number, objectId: number): void {
@@ -718,9 +872,10 @@ export class GameApp {
   }
 
   private syncGrooveUnlocks(): void {
-    const previousLevel = this.music.currentGrooveLevel;
+    const previousLevel = this.currentMusicState.currentGrooveLevel;
     const nextLevel = this.getGrooveLevelForCharge(this.grooveCharge);
     this.music.setGrooveLevel(nextLevel);
+    this.refreshMusicState();
 
     if (nextLevel !== previousLevel) {
       this.overlay.showNoteLabel(
@@ -734,7 +889,8 @@ export class GameApp {
   }
 
   private forceGrooveLevelIncrease(): void {
-    const currentIndex = this.grooveLevels.indexOf(this.music.currentGrooveLevel);
+    const currentLevel = this.currentMusicState.currentGrooveLevel;
+    const currentIndex = this.grooveLevels.indexOf(currentLevel);
     if (currentIndex < 0 || currentIndex >= this.grooveLevels.length - 1) {
       return;
     }
@@ -742,6 +898,7 @@ export class GameApp {
     const nextLevel = this.grooveLevels[currentIndex + 1];
     this.grooveCharge = Math.max(this.grooveCharge, ((currentIndex + 1) / Math.max(1, this.grooveLevels.length - 1)) * GROOVE_TARGET);
     this.music.setGrooveLevel(nextLevel);
+    this.refreshMusicState();
     this.overlay.showNoteLabel(
       `Groove ${nextLevel}`,
       this.canvas.clientWidth * 0.5,
@@ -848,13 +1005,14 @@ export class GameApp {
 
   private getOverlayState(): OverlayState {
     const formationSummary = this.getActiveFormationSummary();
+    const musicState = this.currentMusicState;
     this.overlayState.sessionPhase = this.sessionPhase;
     this.overlayState.transitionState = this.transitionState;
     this.overlayState.activeObjects = this.world.getObjectCount();
     this.overlayState.fps = this.smoothedFps;
     this.overlayState.frameTimeMs = this.smoothedFrameTimeMs;
-    this.overlayState.rootNote = this.music.rootNote;
-    this.overlayState.mode = this.music.mode;
+    this.overlayState.rootNote = musicState.rootNote;
+    this.overlayState.mode = musicState.mode;
     this.overlayState.liveMode = this.liveMode;
     this.overlayState.hudVisible = this.hudVisible;
     this.overlayState.spawnInterval = this.spawner.spawnInterval;
@@ -862,7 +1020,7 @@ export class GameApp {
     this.overlayState.spawnPattern = this.spawner.spawnPattern;
     this.overlayState.grooveCharge = this.grooveCharge;
     this.overlayState.grooveTarget = GROOVE_TARGET;
-    this.overlayState.grooveLevel = this.music.currentGrooveLevel;
+    this.overlayState.grooveLevel = musicState.currentGrooveLevel;
     this.overlayState.grooveLayerLabel = this.getGrooveLayerLabel();
     this.overlayState.activeFormationCaught = formationSummary.caught;
     this.overlayState.activeFormationRequired = formationSummary.required;
@@ -921,7 +1079,7 @@ export class GameApp {
     return this.activeFormationSummary;
   }
 
-  private getGrooveLayerLabel(): string {
+  private getGrooveLayerLabel(currentGrooveLevel = this.currentMusicState.currentGrooveLevel): string {
     if (this.sessionPhase === "completed") {
       return "Song Complete";
     }
@@ -935,21 +1093,21 @@ export class GameApp {
     }
 
     if (this.transitionState.kind === "grooveBuild") {
-      return `Groove ${this.music.currentGrooveLevel} -> ${this.transitionState.targetLevel}`;
+      return `Groove ${currentGrooveLevel} -> ${this.transitionState.targetLevel}`;
     }
 
     const targetLevel = this.getGrooveLevelForCharge(this.grooveCharge);
-    return targetLevel === this.music.currentGrooveLevel
-      ? `Groove ${this.music.currentGrooveLevel}`
-      : `Groove ${this.music.currentGrooveLevel} -> ${targetLevel}`;
+    return targetLevel === currentGrooveLevel
+      ? `Groove ${currentGrooveLevel}`
+      : `Groove ${currentGrooveLevel} -> ${targetLevel}`;
   }
 
-  private getGrooveIntensity(): number {
+  private getGrooveIntensity(currentGrooveLevel = this.currentMusicState.currentGrooveLevel): number {
     if (this.grooveLevels.length <= 1) {
       return 0.16;
     }
 
-    const grooveIndex = this.grooveLevels.indexOf(this.music.currentGrooveLevel);
+    const grooveIndex = this.grooveLevels.indexOf(currentGrooveLevel);
     const normalizedLevel = grooveIndex <= 0 ? 0 : grooveIndex / (this.grooveLevels.length - 1);
     return 0.16 + normalizedLevel * 0.84;
   }
@@ -972,8 +1130,8 @@ export class GameApp {
     return this.grooveLevels[grooveIndex] ?? this.grooveLevels[this.grooveLevels.length - 1] ?? 1;
   }
 
-  private syncSongCompletionState(): void {
-    const songCompleted = this.music.isSongCompleted();
+  private syncSongCompletionState(musicState: MusicRuntimeSnapshot): void {
+    const songCompleted = musicState.songCompleted;
     if (!songCompleted || this.sessionPhase === "completed") {
       return;
     }
@@ -984,10 +1142,9 @@ export class GameApp {
     this.onSongCompleted?.(this.getCompletionStats());
   }
 
-  private syncTransitionState(
-    pendingGrooveBoost: ReturnType<MusicSystem["getPendingGrooveBoost"]>,
-    endingState: ReturnType<MusicSystem["getEndingState"]>,
-  ): void {
+  private syncTransitionState(musicState: MusicRuntimeSnapshot): void {
+    const pendingGrooveBoost = musicState.pendingGrooveBoost;
+    const endingState = musicState.endingState;
     if (endingState) {
       this.transitionState = {
         kind: "songEnding",
@@ -1029,6 +1186,11 @@ export class GameApp {
 
   private setSessionPhase(phase: GameSessionPhase): void {
     this.sessionPhase = phase;
+  }
+
+  private refreshMusicState(): MusicRuntimeSnapshot {
+    this.currentMusicState = this.music.getRuntimeSnapshot();
+    return this.currentMusicState;
   }
 
   private pickBackdropDirection(): Vector2 {

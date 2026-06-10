@@ -31,20 +31,19 @@ const escapeHtml = (value: string): string =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value));
+
 interface PlayingSession {
   songId: string;
-  playQueueSongIds?: string[];
-  queueIndex?: number;
+  playQueueSongIds: string[];
+  queueIndex: number;
+  queueMode: "single" | "queue";
+  phase: "cueing" | "playing" | "completed";
+  completionStats: GameCompletionStats | null;
 }
 
-interface TrackTransitionOverlay {
-  kicker: string;
-  title: string;
-  subtitle: string;
-  accent: string;
-}
-
-interface EndScreenOverlay {
+interface EndScreenDisplay {
   kicker: string;
   title: string;
   subtitle: string;
@@ -74,14 +73,11 @@ export class AppShell {
   private route: LibraryRoute = { view: "home" };
   private libraryState: LibraryState = createDefaultLibraryState();
   private session: PlayingSession | null = null;
-  private pendingAdvanceTimeout?: number;
-  private trackTransitionOverlay: TrackTransitionOverlay | null = null;
-  private endScreenOverlay: EndScreenOverlay | null = null;
-  private lastCompletionStats: GameCompletionStats | null = null;
   private gameAppModulePromise?: Promise<typeof import("./game/GameApp")>;
   private songConfigPromises = new Map<string, Promise<SongConfig>>();
   private previewPlayer = new SongPreviewPlayer();
   private previewSession: PreviewSession | null = null;
+  private playbackLaunchToken = 0;
 
   constructor(private root: HTMLDivElement) {
     this.root.innerHTML = `
@@ -120,7 +116,6 @@ export class AppShell {
   }
 
   dispose(): void {
-    this.clearPendingAdvance();
     this.libraryRoot.removeEventListener("click", this.handleLibraryClick);
     this.sessionUiRoot.removeEventListener("click", this.handleLibraryClick);
     this.disposeGame();
@@ -220,7 +215,7 @@ export class AppShell {
       if (!this.session) {
         return;
       }
-      await this.startSong(this.session.songId, this.session.playQueueSongIds, this.session.queueIndex);
+      await this.startSong(this.session.songId, this.getExplicitQueueSongIds(this.session), this.session.queueIndex);
       return;
     }
 
@@ -230,7 +225,7 @@ export class AppShell {
         return;
       }
       const nextSession = this.getNextTrackSession(this.session, nextSongId);
-      await this.startSong(nextSongId, nextSession.playQueueSongIds, nextSession.queueIndex);
+      await this.startSong(nextSongId, this.getExplicitQueueSongIds(nextSession), nextSession.queueIndex);
       return;
     }
 
@@ -525,10 +520,9 @@ export class AppShell {
     const song = this.session ? getSongById(this.session.songId) : undefined;
     const album = song ? getAlbumById(song.albumId) : undefined;
     const favorite = song ? this.libraryState.favoritesSongIds.includes(song.id) : false;
-    const queueLabel =
-      this.session?.playQueueSongIds && this.session.queueIndex !== undefined
-        ? `${this.session.queueIndex + 1} / ${this.session.playQueueSongIds.length}`
-        : null;
+    const queueLabel = this.session ? this.getQueueLabel(this.session) : null;
+    const cueingOverlay = this.session && song ? this.getCueingOverlay(this.session, song) : null;
+    const endScreenOverlay = this.session && song ? this.getEndScreenDisplay(this.session, song) : null;
 
     this.libraryRoot.classList.add("hidden");
     this.gameShell.classList.remove("hidden");
@@ -559,17 +553,17 @@ export class AppShell {
             : ""
         }
         ${
-          this.trackTransitionOverlay
+          cueingOverlay
             ? `
-              <div class="track-transition-overlay" style="--transition-accent:${this.trackTransitionOverlay.accent};">
-                <span class="section-label">${escapeHtml(this.trackTransitionOverlay.kicker)}</span>
-                <h2>${escapeHtml(this.trackTransitionOverlay.title)}</h2>
-                <p>${escapeHtml(this.trackTransitionOverlay.subtitle)}</p>
+              <div class="track-transition-overlay" style="--transition-accent:${cueingOverlay.accent};">
+                <span class="section-label">${escapeHtml(cueingOverlay.kicker)}</span>
+                <h2>${escapeHtml(cueingOverlay.title)}</h2>
+                <p>${escapeHtml(cueingOverlay.subtitle)}</p>
               </div>
             `
             : ""
         }
-        ${this.endScreenOverlay ? this.renderEndScreenOverlay(song) : ""}
+        ${endScreenOverlay ? this.renderEndScreenOverlay(endScreenOverlay, song) : ""}
       </div>
     `;
   }
@@ -589,27 +583,22 @@ export class AppShell {
       return;
     }
 
-    this.clearPendingAdvance();
+    const launchToken = ++this.playbackLaunchToken;
     this.disposeGame();
     this.stopPreview();
     this.libraryState = registerRecentPlayback(this.libraryState, song.id, song.albumId);
     saveLibraryState(this.libraryState);
-    this.endScreenOverlay = null;
-    this.lastCompletionStats = null;
-    this.trackTransitionOverlay = {
-      kicker: "Cueing Track",
-      title: song.title,
-      subtitle: getAlbumById(song.albumId)?.title ?? "",
-      accent: getAlbumById(song.albumId)?.theme.accent ?? "#7ee9ef",
-    };
     const album = getAlbumById(song.albumId);
-    this.session = { songId, playQueueSongIds, queueIndex };
+    this.session = this.createPlaybackSession(songId, playQueueSongIds, queueIndex);
     this.renderSessionChrome();
 
     const [songConfig, gameAppModule] = await Promise.all([
       this.getOrLoadSongConfig(song.id),
       this.getGameAppModule(),
     ]);
+    if (launchToken !== this.playbackLaunchToken || this.session?.songId !== songId) {
+      return;
+    }
     const { GameApp } = gameAppModule;
 
     this.game = new GameApp(this.canvas, this.gameUiRoot, {
@@ -621,25 +610,29 @@ export class AppShell {
       },
     });
     await this.game.beginFromSelection();
+    if (launchToken !== this.playbackLaunchToken || this.session?.songId !== songId) {
+      this.game?.dispose();
+      this.game = undefined;
+      return;
+    }
     this.game.start();
-    this.trackTransitionOverlay = null;
+    this.setSessionPhase("playing");
     this.preloadNextQueuedSongConfig(this.session);
     if (DEV_BOOT_TO_END_SCREEN) {
-      this.showEndScreenOverlay();
+      this.handleSongCompleted({ specialCatches: 0, longestSolo: 0 });
     }
     this.renderSessionChrome();
   }
 
   private handleSongCompleted(stats: GameCompletionStats): void {
-    this.lastCompletionStats = stats;
-    this.showEndScreenOverlay();
+    this.setSessionPhase("completed", stats);
+    this.game?.setPaused(true);
+    this.renderSessionChrome();
   }
 
   private stopPlayback(): void {
-    this.clearPendingAdvance();
+    this.playbackLaunchToken += 1;
     this.disposeGame();
-    this.trackTransitionOverlay = null;
-    this.endScreenOverlay = null;
     this.session = null;
     this.render();
   }
@@ -664,8 +657,6 @@ export class AppShell {
     this.previewPlayer.stop();
     this.disposeGame();
     this.session = null;
-    this.trackTransitionOverlay = null;
-    this.endScreenOverlay = null;
     this.route = { view: "album", albumId: song.albumId };
     this.previewSession = {
       songId,
@@ -730,13 +721,6 @@ export class AppShell {
     this.sessionUiRoot.innerHTML = "";
   }
 
-  private clearPendingAdvance(): void {
-    if (this.pendingAdvanceTimeout !== undefined) {
-      window.clearTimeout(this.pendingAdvanceTimeout);
-      this.pendingAdvanceTimeout = undefined;
-    }
-  }
-
   private getGameAppModule(): Promise<typeof import("./game/GameApp")> {
     if (!this.gameAppModulePromise) {
       this.gameAppModulePromise = import("./game/GameApp");
@@ -769,7 +753,7 @@ export class AppShell {
   }
 
   private preloadNextQueuedSongConfig(session: PlayingSession | null): void {
-    if (!session?.playQueueSongIds || session.queueIndex === undefined) {
+    if (!session || session.queueMode === "single") {
       return;
     }
 
@@ -806,45 +790,9 @@ export class AppShell {
     `;
   }
 
-  private showEndScreenOverlay(): void {
-    const session = this.session;
-    if (!session) {
-      return;
-    }
-
-    const song = getSongById(session.songId);
-    const album = song ? getAlbumById(song.albumId) : undefined;
-    const artist = album ? getArtistById(album.artistId) : undefined;
-    const nextSongId = this.getNextTrackSongId(session);
-    const queueLabel =
-      session.playQueueSongIds && session.queueIndex !== undefined
-        ? `${session.queueIndex + 1}/${session.playQueueSongIds.length}`
-        : "Single";
-
-    this.game?.setPaused(true);
-    this.trackTransitionOverlay = null;
-    this.endScreenOverlay = {
-      kicker: nextSongId ? "Transmission Complete" : "Set Complete",
-      title: song?.title ?? "Track Complete",
-      subtitle: [album?.title, artist?.name].filter(Boolean).join(" · "),
-      praise: nextSongId ? "Locked in. Ready for the next one." : "Locked in. Step back or run it again.",
-      accent: album?.theme.accent ?? "#7ee9ef",
-      stats: [
-        { label: "Special Catches", value: `${this.lastCompletionStats?.specialCatches ?? 0}` },
-        { label: "Longest Solo", value: `${this.lastCompletionStats?.longestSolo ?? 0} catches` },
-        { label: "Queue Position", value: queueLabel },
-      ],
-    };
-    this.renderSessionChrome();
-  }
-
-  private renderEndScreenOverlay(song: SongEntry | undefined): string {
+  private renderEndScreenOverlay(overlay: EndScreenDisplay, song: SongEntry | undefined): string {
     const album = song ? getAlbumById(song.albumId) : undefined;
     const nextSongId = this.getNextTrackSongId(this.session);
-    const overlay = this.endScreenOverlay;
-    if (!overlay) {
-      return "";
-    }
     const coverStyle = album?.coverArt
       ? `--end-cover-image:url('${album.coverArt.replace(/'/g, "\\'")}');`
       : "";
@@ -885,7 +833,7 @@ export class AppShell {
   }
 
   private getNextQueuedSongId(session: PlayingSession | null): string | null {
-    if (!session?.playQueueSongIds || session.queueIndex === undefined) {
+    if (!session || session.queueMode === "single") {
       return null;
     }
 
@@ -921,12 +869,15 @@ export class AppShell {
   }
 
   private getNextTrackSession(session: PlayingSession | null, nextSongId: string): PlayingSession {
-    if (session?.playQueueSongIds && session.queueIndex !== undefined) {
+    if (session && session.queueMode === "queue") {
       const nextQueueIndex = session.playQueueSongIds.indexOf(nextSongId);
       return {
         songId: nextSongId,
         playQueueSongIds: session.playQueueSongIds,
+        queueMode: "queue",
         queueIndex: nextQueueIndex >= 0 ? nextQueueIndex : session.queueIndex + 1,
+        phase: "cueing",
+        completionStats: null,
       };
     }
 
@@ -936,7 +887,10 @@ export class AppShell {
     return {
       songId: nextSongId,
       playQueueSongIds: albumSongs.map((song) => song.id),
+      queueMode: "queue",
       queueIndex: nextQueueIndex >= 0 ? nextQueueIndex : 0,
+      phase: "cueing",
+      completionStats: null,
     };
   }
 
@@ -960,5 +914,92 @@ export class AppShell {
         }
       </div>
     `;
+  }
+
+  private createPlaybackSession(songId: string, playQueueSongIds?: string[], queueIndex?: number): PlayingSession {
+    if (playQueueSongIds && playQueueSongIds.length > 0) {
+      const normalizedQueueIndex = clamp(queueIndex ?? playQueueSongIds.indexOf(songId), 0, playQueueSongIds.length - 1);
+      return {
+        songId,
+        playQueueSongIds,
+        queueIndex: normalizedQueueIndex,
+        queueMode: "queue",
+        phase: "cueing",
+        completionStats: null,
+      };
+    }
+
+    return {
+      songId,
+      playQueueSongIds: [songId],
+      queueIndex: 0,
+      queueMode: "single",
+      phase: "cueing",
+      completionStats: null,
+    };
+  }
+
+  private setSessionPhase(phase: PlayingSession["phase"], completionStats: GameCompletionStats | null = null): void {
+    if (!this.session) {
+      return;
+    }
+
+    this.session = {
+      ...this.session,
+      phase,
+      completionStats,
+    };
+  }
+
+  private getQueueLabel(session: PlayingSession): string | null {
+    if (session.queueMode === "single") {
+      return null;
+    }
+
+    return `${session.queueIndex + 1} / ${session.playQueueSongIds.length}`;
+  }
+
+  private getExplicitQueueSongIds(session: PlayingSession): string[] | undefined {
+    return session.queueMode === "queue" ? session.playQueueSongIds : undefined;
+  }
+
+  private getCueingOverlay(
+    session: PlayingSession,
+    song: SongEntry,
+  ): { kicker: string; title: string; subtitle: string; accent: string } | null {
+    if (session.phase !== "cueing") {
+      return null;
+    }
+
+    const album = getAlbumById(song.albumId);
+    return {
+      kicker: "Cueing Track",
+      title: song.title,
+      subtitle: album?.title ?? "",
+      accent: album?.theme.accent ?? "#7ee9ef",
+    };
+  }
+
+  private getEndScreenDisplay(session: PlayingSession, song: SongEntry): EndScreenDisplay | null {
+    if (session.phase !== "completed") {
+      return null;
+    }
+
+    const album = getAlbumById(song.albumId);
+    const artist = album ? getArtistById(album.artistId) : undefined;
+    const nextSongId = this.getNextTrackSongId(session);
+    const queueValue = session.queueMode === "single" ? "Single" : `${session.queueIndex + 1}/${session.playQueueSongIds.length}`;
+    return {
+      kicker: nextSongId ? "Transmission Complete" : "Set Complete",
+      title: song.title,
+      subtitle: [album?.title, artist?.name].filter(Boolean).join(" · "),
+      praise: nextSongId ? "Locked in. Ready for the next one." : "Locked in. Step back or run it again.",
+      accent: album?.theme.accent ?? "#7ee9ef",
+      stats: [
+        { label: "Special Catches", value: `${session.completionStats?.specialCatches ?? 0}` },
+        { label: "Longest Solo", value: `${session.completionStats?.longestSolo ?? 0} catches` },
+        { label: "Queue Position", value: queueValue },
+      ],
+    };
   }
 }

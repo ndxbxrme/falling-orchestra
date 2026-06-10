@@ -10,7 +10,13 @@ import type {
   SoloVoiceConfig,
   SongConfig,
 } from "./songConfig";
-import type { InstrumentFamily, PlayedNote, RootNoteName, ScaleModeName } from "./types";
+import type {
+  InstrumentFamily,
+  MusicRuntimeSnapshot,
+  PlayedNote,
+  RootNoteName,
+  ScaleModeName,
+} from "./types";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -223,6 +229,19 @@ export class MusicSystem {
     intensity: 0,
   };
   private activeImpactVoiceEnds: number[] = [];
+  private grooveLandingSequence = 0;
+  private runtimeSnapshot: MusicRuntimeSnapshot = {
+    rootNote: "C",
+    mode: "ionian",
+    currentGrooveLevel: 1,
+    beatPulse: 0,
+    transportQuarterIndex: null,
+    pendingGrooveBoost: null,
+    endingState: null,
+    grooveLandingLevel: null,
+    grooveLandingSequence: 0,
+    songCompleted: false,
+  };
 
   loadSong(song: SongConfig): void {
     this.song = song;
@@ -266,6 +285,8 @@ export class MusicSystem {
       this.rootNote = this.harmonyTimeline[0].rootNote;
       this.mode = this.harmonyTimeline[0].mode;
     }
+    this.grooveLandingSequence = 0;
+    this.syncRuntimeSnapshot();
     void this.prefetchLoopAssets();
     void this.prefetchImpactSampleAssets();
   }
@@ -317,10 +338,12 @@ export class MusicSystem {
 
   setRootNote(note: RootNoteName): void {
     this.rootNote = note;
+    this.syncRuntimeSnapshot();
   }
 
   setMode(mode: ScaleModeName): void {
     this.mode = mode;
+    this.syncRuntimeSnapshot();
   }
 
   setHarmonyControlMode(mode: "cycle" | "manual"): void {
@@ -329,6 +352,7 @@ export class MusicSystem {
     if (mode === "cycle" && this.audioContext) {
       this.syncDisplayedHarmony(this.audioContext.currentTime);
     }
+    this.syncRuntimeSnapshot();
   }
 
   setMuted(muted: boolean): void {
@@ -372,11 +396,13 @@ export class MusicSystem {
     if (level === this.currentGrooveLevel) {
       this.queuedTransitionLevel = null;
       this.clearTransitionNotice();
+      this.syncRuntimeSnapshot();
       return;
     }
 
     this.queuedTransitionLevel = level;
     this.updateTransitionNotice(level);
+    this.syncRuntimeSnapshot();
   }
 
   resetGroovePlayback(): void {
@@ -404,6 +430,8 @@ export class MusicSystem {
     this.resetImpactMixLevel();
     this.primeTransport(nextStartTime);
     this.scheduleStartupGroove(nextStartTime);
+    this.grooveLandingSequence = 0;
+    this.syncRuntimeSnapshot();
   }
 
   triggerImpact(options: {
@@ -558,63 +586,8 @@ export class MusicSystem {
     void this.audioContext?.close();
   }
 
-  isSongCompleted(): boolean {
-    return this.songCompleted;
-  }
-
-  getPendingGrooveBoost(): { targetLevel: number; intensity: number } | null {
-    if (!this.audioContext || this.transitionNoticeLevel === null || this.transitionNoticeHandoffTime === undefined) {
-      return null;
-    }
-
-    const now = this.audioContext.currentTime;
-    if (now >= this.transitionNoticeHandoffTime) {
-      this.clearTransitionNotice();
-      return null;
-    }
-
-    const queuedAt = this.transitionNoticeQueuedAt ?? Math.max(0, this.transitionNoticeHandoffTime - 0.001);
-    const totalWindow = Math.max(0.001, this.transitionNoticeHandoffTime - queuedAt);
-    const progress = clamp((now - queuedAt) / totalWindow, 0, 1);
-
-    return {
-      targetLevel: this.transitionNoticeLevel,
-      intensity: 0.16 + progress * 0.84,
-    };
-  }
-
-  getEndingState(): { progress: number; intensity: number } | null {
-    if (
-      !this.audioContext ||
-      this.songCompleted ||
-      this.endingStartedAt === undefined ||
-      this.endingCompletesAt === undefined
-    ) {
-      return null;
-    }
-
-    const now = this.audioContext.currentTime;
-    if (now >= this.endingCompletesAt) {
-      return null;
-    }
-
-    const totalWindow = Math.max(0.001, this.endingCompletesAt - this.endingStartedAt);
-    const progress = clamp((now - this.endingStartedAt) / totalWindow, 0, 1);
-
-    return {
-      progress,
-      intensity: 0.22 + progress * 0.78,
-    };
-  }
-
-  consumeGrooveLandingEvent(): { level: number } | null {
-    if (this.landedGrooveLevel === null) {
-      return null;
-    }
-
-    const level = this.landedGrooveLevel;
-    this.landedGrooveLevel = null;
-    return { level };
+  getRuntimeSnapshot(): MusicRuntimeSnapshot {
+    return this.runtimeSnapshot;
   }
 
   update(): void {
@@ -638,6 +611,7 @@ export class MusicSystem {
       this.currentGrooveLevel = this.pendingGrooveLandingLevel;
       this.desiredGrooveLevel = this.pendingGrooveLandingLevel;
       this.landedGrooveLevel = this.pendingGrooveLandingLevel;
+      this.grooveLandingSequence += 1;
       this.clearPendingGrooveLanding();
       this.clearTransitionNotice();
     }
@@ -689,42 +663,7 @@ export class MusicSystem {
       const when = this.nextGrooveBoundaryTime;
       this.scheduleLoopBoundary(when);
     }
-  }
-
-  getTransportQuarterIndex(): number | null {
-    if (!this.audioContext || this.transportStartTime === undefined) {
-      return null;
-    }
-
-    const quarterDuration = 60 / this.bpm;
-    const elapsed = this.audioContext.currentTime - this.transportStartTime;
-
-    if (elapsed <= 0) {
-      return 0;
-    }
-
-    return Math.floor(elapsed / quarterDuration);
-  }
-
-  getBeatPulse(): number {
-    if (!this.audioContext || this.transportStartTime === undefined) {
-      return 0;
-    }
-
-    const quarterDuration = 60 / this.bpm;
-    const elapsed = this.audioContext.currentTime - this.transportStartTime;
-
-    if (elapsed <= 0) {
-      return 0;
-    }
-
-    const phase = (elapsed / quarterDuration) % 1;
-    const quarterIndex = Math.floor(elapsed / quarterDuration);
-    const accent = quarterIndex % 4 === 0 ? 1 : 0.78;
-    const basePulse = Math.exp(-phase * 7.6);
-    const tail = Math.max(0, 1 - phase * 1.8);
-
-    return clamp(basePulse * tail * accent, 0, 1);
+    this.syncRuntimeSnapshot(now);
   }
 
   private syncMasterVolume(immediate = false): void {
@@ -889,6 +828,96 @@ export class MusicSystem {
     const harmony = this.getHarmonyForTime(time);
     this.rootNote = harmony.rootNote;
     this.mode = harmony.mode;
+  }
+
+  private syncRuntimeSnapshot(now = this.audioContext?.currentTime): void {
+    this.runtimeSnapshot = {
+      rootNote: this.rootNote,
+      mode: this.mode,
+      currentGrooveLevel: this.currentGrooveLevel,
+      beatPulse: this.computeBeatPulse(now),
+      transportQuarterIndex: this.computeTransportQuarterIndex(now),
+      pendingGrooveBoost: this.computePendingGrooveBoost(now),
+      endingState: this.computeEndingState(now),
+      grooveLandingLevel: this.landedGrooveLevel,
+      grooveLandingSequence: this.grooveLandingSequence,
+      songCompleted: this.songCompleted,
+    };
+  }
+
+  private computePendingGrooveBoost(now = this.audioContext?.currentTime): { targetLevel: number; intensity: number } | null {
+    if (now === undefined || this.transitionNoticeLevel === null || this.transitionNoticeHandoffTime === undefined) {
+      return null;
+    }
+
+    if (now >= this.transitionNoticeHandoffTime) {
+      return null;
+    }
+
+    const queuedAt = this.transitionNoticeQueuedAt ?? Math.max(0, this.transitionNoticeHandoffTime - 0.001);
+    const totalWindow = Math.max(0.001, this.transitionNoticeHandoffTime - queuedAt);
+    const progress = clamp((now - queuedAt) / totalWindow, 0, 1);
+
+    return {
+      targetLevel: this.transitionNoticeLevel,
+      intensity: 0.16 + progress * 0.84,
+    };
+  }
+
+  private computeEndingState(now = this.audioContext?.currentTime): { progress: number; intensity: number } | null {
+    if (
+      now === undefined ||
+      this.songCompleted ||
+      this.endingStartedAt === undefined ||
+      this.endingCompletesAt === undefined ||
+      now >= this.endingCompletesAt
+    ) {
+      return null;
+    }
+
+    const totalWindow = Math.max(0.001, this.endingCompletesAt - this.endingStartedAt);
+    const progress = clamp((now - this.endingStartedAt) / totalWindow, 0, 1);
+
+    return {
+      progress,
+      intensity: 0.22 + progress * 0.78,
+    };
+  }
+
+  private computeTransportQuarterIndex(now = this.audioContext?.currentTime): number | null {
+    if (now === undefined || this.transportStartTime === undefined) {
+      return null;
+    }
+
+    const quarterDuration = 60 / this.bpm;
+    const elapsed = now - this.transportStartTime;
+
+    if (elapsed <= 0) {
+      return 0;
+    }
+
+    return Math.floor(elapsed / quarterDuration);
+  }
+
+  private computeBeatPulse(now = this.audioContext?.currentTime): number {
+    if (now === undefined || this.transportStartTime === undefined) {
+      return 0;
+    }
+
+    const quarterDuration = 60 / this.bpm;
+    const elapsed = now - this.transportStartTime;
+
+    if (elapsed <= 0) {
+      return 0;
+    }
+
+    const phase = (elapsed / quarterDuration) % 1;
+    const quarterIndex = Math.floor(elapsed / quarterDuration);
+    const accent = quarterIndex % 4 === 0 ? 1 : 0.78;
+    const basePulse = Math.exp(-phase * 7.6);
+    const tail = Math.max(0, 1 - phase * 1.8);
+
+    return clamp(basePulse * tail * accent, 0, 1);
   }
 
   private getHarmonyForTime(time: number): { rootNote: RootNoteName; mode: ScaleModeName } {
