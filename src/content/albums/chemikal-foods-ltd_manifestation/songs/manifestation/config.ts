@@ -13,7 +13,7 @@ export const SONG1_CONFIG: SongConfig = {
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
-    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "pentatonicMajor" },
+    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "bluesMajor" },
   ],
   grooveLevels: [
     {
@@ -36,6 +36,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("02i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 1,
       },
     },
     {
@@ -47,6 +48,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("03i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 1,
       },
     },
     {
@@ -58,6 +60,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("04i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 1,
       },
     },
     {
@@ -69,6 +72,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("05i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 1,
       },
     },
     {
@@ -80,6 +84,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("06i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 4,
       },
     },
     {
@@ -91,6 +96,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("07i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 1,
       },
     },
     {
@@ -102,6 +108,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("08i.ogg"),
         bars: 12,
+        grooveChangeAfterBars: 10,
       },
     },
     {
@@ -113,6 +120,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("09i.ogg"),
         bars: 16,
+        grooveChangeAfterBars: 1,
       },
     },
     {

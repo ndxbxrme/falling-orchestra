@@ -3,6 +3,9 @@ import type { RootNoteName, ScaleModeName } from "./types";
 export class InputController {
   private leftPressed = false;
   private rightPressed = false;
+  private gamepadHorizontalAxis = 0;
+  private gamepadInteractionActive = false;
+  private readonly gamepadButtonPressed = new Set<number>();
 
   constructor(
     private onInteract: () => void,
@@ -26,7 +29,78 @@ export class InputController {
   }
 
   get horizontalAxis(): number {
-    return Number(this.rightPressed) - Number(this.leftPressed);
+    const keyboardAxis = Number(this.rightPressed) - Number(this.leftPressed);
+    if (Math.abs(this.gamepadHorizontalAxis) <= 0.001) {
+      return keyboardAxis;
+    }
+
+    if (keyboardAxis === 0) {
+      return this.gamepadHorizontalAxis;
+    }
+
+    return Math.abs(this.gamepadHorizontalAxis) > Math.abs(keyboardAxis) ? this.gamepadHorizontalAxis : keyboardAxis;
+  }
+
+  update(): void {
+    const getGamepads = navigator.getGamepads?.bind(navigator);
+    if (!getGamepads) {
+      this.gamepadHorizontalAxis = 0;
+      this.gamepadInteractionActive = false;
+      this.gamepadButtonPressed.clear();
+      return;
+    }
+
+    const pads = getGamepads();
+    let horizontalAxis = 0;
+    let interactionActive = false;
+    const pressedButtons = new Set<number>();
+
+    for (const gamepad of pads) {
+      if (!gamepad?.connected) {
+        continue;
+      }
+
+      const leftStickX = clampGamepadAxis(gamepad.axes[0] ?? 0);
+      const dpadAxis = Number(readGamepadButton(gamepad.buttons[15])) - Number(readGamepadButton(gamepad.buttons[14]));
+      const padAxis = Math.abs(leftStickX) >= Math.abs(dpadAxis) ? leftStickX : dpadAxis;
+      if (Math.abs(padAxis) > Math.abs(horizontalAxis)) {
+        horizontalAxis = padAxis;
+      }
+
+      const moving = Math.abs(padAxis) >= GAMEPAD_INTERACT_AXIS_THRESHOLD;
+      const activeButtons = GAMEPAD_INTERACT_BUTTONS.some((index) => readGamepadButton(gamepad.buttons[index]));
+      interactionActive ||= moving || activeButtons;
+
+      for (const index of GAMEPAD_BUTTON_COMMANDS.keys()) {
+        if (readGamepadButton(gamepad.buttons[index])) {
+          pressedButtons.add(index);
+        }
+      }
+    }
+
+    this.gamepadHorizontalAxis = horizontalAxis;
+    if (interactionActive && !this.gamepadInteractionActive) {
+      this.onInteract();
+    }
+    this.gamepadInteractionActive = interactionActive;
+
+    for (const index of pressedButtons) {
+      if (this.gamepadButtonPressed.has(index)) {
+        continue;
+      }
+
+      const command = GAMEPAD_BUTTON_COMMANDS.get(index);
+      if (command) {
+        this.onCommand(command);
+      } else {
+        this.onInteract();
+      }
+    }
+
+    this.gamepadButtonPressed.clear();
+    for (const index of pressedButtons) {
+      this.gamepadButtonPressed.add(index);
+    }
   }
 
   dispose(): void {
@@ -79,11 +153,6 @@ export class InputController {
       return;
     }
 
-    if (event.code === "Escape") {
-      this.onCommand("toggleHud");
-      return;
-    }
-
     if (liveMode) {
       const rootHotkey = LIVE_ROOT_HOTKEYS[event.code];
       if (rootHotkey) {
@@ -101,6 +170,11 @@ export class InputController {
     }
 
     if (event.code === "KeyP") {
+      this.onCommand("pause");
+      return;
+    }
+
+    if (event.code === "Escape") {
       this.onCommand("pause");
       return;
     }
@@ -163,3 +237,36 @@ const LIVE_MODE_HOTKEYS: Partial<Record<string, ScaleModeName>> = {
   KeyC: "bluesMajor",
   KeyV: "bluesMinor",
 };
+
+const GAMEPAD_AXIS_DEADZONE = 0.18;
+const GAMEPAD_INTERACT_AXIS_THRESHOLD = 0.36;
+const GAMEPAD_INTERACT_BUTTONS = [0, 1, 2, 3, 4, 5, 9, 12, 13, 14, 15] as const;
+const GAMEPAD_BUTTON_COMMANDS = new Map<
+  number,
+  | "pause"
+  | "reset"
+  | "mute"
+  | "toggleLiveMode"
+  | "toggleHud"
+  | "spawnRateUp"
+  | "spawnRateDown"
+  | "forceGrooveUp"
+>([
+  [9, "pause"],
+  [5, "forceGrooveUp"],
+  [12, "spawnRateUp"],
+  [13, "spawnRateDown"],
+  [2, "mute"],
+]);
+
+function readGamepadButton(button: GamepadButton | undefined): boolean {
+  return Boolean(button?.pressed);
+}
+
+function clampGamepadAxis(value: number): number {
+  if (Math.abs(value) < GAMEPAD_AXIS_DEADZONE) {
+    return 0;
+  }
+
+  return Math.max(-1, Math.min(1, value));
+}

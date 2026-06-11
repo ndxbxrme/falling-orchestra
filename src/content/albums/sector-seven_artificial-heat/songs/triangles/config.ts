@@ -102,6 +102,7 @@ export const SONG8_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("08i.ogg"),
         bars: 12,
+        grooveChangeAfterBars: 10,
       },
     },
     {

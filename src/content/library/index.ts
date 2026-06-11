@@ -3,6 +3,7 @@ import type {
   Artist,
   LibraryState,
   RecommendedSection,
+  SongMoodTag,
   SongEntry,
 } from "../schema";
 import { MUSIC_LIBRARY } from "./registry";
@@ -35,6 +36,29 @@ export const getFavoriteSongs = (state: LibraryState): SongEntry[] =>
   state.favoritesSongIds
     .map((songId) => getSongById(songId))
     .filter((song): song is SongEntry => Boolean(song));
+
+export const getArtistAlbums = (artistId: string): Album[] =>
+  getVisibleAlbums()
+    .filter((album) => album.artistId === artistId);
+
+export const getArtistSongs = (artistId: string): SongEntry[] =>
+  getVisibleSongs()
+    .filter((song) => song.artistId === artistId)
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+export const getGenreSongs = (genre: SongMoodTag): SongEntry[] =>
+  getVisibleSongs()
+    .filter((song) => song.moodTags.includes(genre))
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+export const getGenreAlbums = (genre: SongMoodTag): Album[] => {
+  const albumIds = new Set(getGenreSongs(genre).map((song) => song.albumId));
+  return getVisibleAlbums().filter((album) => albumIds.has(album.id));
+};
+
+export const getAvailableGenres = (): SongMoodTag[] =>
+  [...new Set(getVisibleSongs().flatMap((song) => song.moodTags))]
+    .sort((a, b) => a.localeCompare(b)) as SongMoodTag[];
 
 export const getRecentSongs = (state: LibraryState): SongEntry[] =>
   state.recentSongIds

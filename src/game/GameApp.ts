@@ -140,6 +140,7 @@ export class GameApp {
     grooveCharge: 0,
     grooveTarget: GROOVE_TARGET,
     grooveLevel: 1,
+    grooveLevelTotal: 1,
     grooveLayerLabel: "Groove 1",
     activeFormationCaught: 0,
     activeFormationRequired: 0,
@@ -465,6 +466,7 @@ export class GameApp {
 
   private tick(deltaTime: number): void {
     this.megaComboCooldown = Math.max(0, this.megaComboCooldown - deltaTime);
+    this.input.update();
     this.music.update();
     const musicState = this.refreshMusicState();
     const endingState = musicState.endingState;
@@ -873,13 +875,19 @@ export class GameApp {
 
   private syncGrooveUnlocks(): void {
     const previousLevel = this.currentMusicState.currentGrooveLevel;
+    const previousPendingTarget = this.currentMusicState.pendingGrooveBoost?.targetLevel ?? null;
     const nextLevel = this.getGrooveLevelForCharge(this.grooveCharge);
     this.music.setGrooveLevel(nextLevel);
-    this.refreshMusicState();
+    const musicState = this.refreshMusicState();
+    const nextPendingTarget = musicState.pendingGrooveBoost?.targetLevel ?? null;
 
-    if (nextLevel !== previousLevel) {
+    if (
+      nextPendingTarget !== null &&
+      nextPendingTarget !== previousPendingTarget &&
+      nextPendingTarget !== previousLevel
+    ) {
       this.overlay.showNoteLabel(
-        `Groove ${nextLevel}`,
+        `Groove ${nextPendingTarget}`,
         this.canvas.clientWidth * 0.5,
         this.getResponsiveBannerY(84),
         "#9fedff",
@@ -889,23 +897,30 @@ export class GameApp {
   }
 
   private forceGrooveLevelIncrease(): void {
-    const currentLevel = this.currentMusicState.currentGrooveLevel;
-    const currentIndex = this.grooveLevels.indexOf(currentLevel);
+    const visibleTargetLevel =
+      this.transitionState.kind === "grooveBuild"
+        ? this.transitionState.targetLevel
+        : this.currentMusicState.currentGrooveLevel;
+    const currentIndex = this.grooveLevels.indexOf(visibleTargetLevel);
     if (currentIndex < 0 || currentIndex >= this.grooveLevels.length - 1) {
       return;
     }
 
+    const previousPendingTarget = this.currentMusicState.pendingGrooveBoost?.targetLevel ?? null;
     const nextLevel = this.grooveLevels[currentIndex + 1];
     this.grooveCharge = Math.max(this.grooveCharge, ((currentIndex + 1) / Math.max(1, this.grooveLevels.length - 1)) * GROOVE_TARGET);
     this.music.setGrooveLevel(nextLevel);
-    this.refreshMusicState();
-    this.overlay.showNoteLabel(
-      `Groove ${nextLevel}`,
-      this.canvas.clientWidth * 0.5,
-      this.getResponsiveBannerY(84),
-      "#9fedff",
-      "banner",
-    );
+    const musicState = this.refreshMusicState();
+    const nextPendingTarget = musicState.pendingGrooveBoost?.targetLevel ?? null;
+    if (nextPendingTarget !== null && nextPendingTarget !== previousPendingTarget) {
+      this.overlay.showNoteLabel(
+        `Groove ${nextPendingTarget}`,
+        this.canvas.clientWidth * 0.5,
+        this.getResponsiveBannerY(84),
+        "#9fedff",
+        "banner",
+      );
+    }
   }
 
   private getRequiredFormationCatches(total: number): number {
@@ -978,16 +993,17 @@ export class GameApp {
       return;
     }
 
-    this.longestSoloCatchCount = Math.max(this.longestSoloCatchCount, this.currentSoloCatchCount);
+    const completedSoloCatchCount = this.currentSoloCatchCount;
+    this.longestSoloCatchCount = Math.max(this.longestSoloCatchCount, completedSoloCatchCount);
     this.soloMode.active = false;
     this.soloMode.consecutiveMisses = 0;
     this.currentSoloCatchCount = 0;
     this.activeSoloBallIds.clear();
     this.spawner.setSoloModeActive(false);
-    this.music.stopSoloVoice();
+    this.music.stopSoloVoice(true);
     if (!silent) {
       this.overlay.showNoteLabel(
-        "Solo Complete",
+        `${completedSoloCatchCount} NOTE SOLO`,
         this.canvas.clientWidth * 0.5,
         this.getResponsiveBannerY(118),
         "#ffd7b2",
@@ -1021,6 +1037,7 @@ export class GameApp {
     this.overlayState.grooveCharge = this.grooveCharge;
     this.overlayState.grooveTarget = GROOVE_TARGET;
     this.overlayState.grooveLevel = musicState.currentGrooveLevel;
+    this.overlayState.grooveLevelTotal = this.grooveLevels.length;
     this.overlayState.grooveLayerLabel = this.getGrooveLayerLabel();
     this.overlayState.activeFormationCaught = formationSummary.caught;
     this.overlayState.activeFormationRequired = formationSummary.required;
@@ -1096,10 +1113,7 @@ export class GameApp {
       return `Groove ${currentGrooveLevel} -> ${this.transitionState.targetLevel}`;
     }
 
-    const targetLevel = this.getGrooveLevelForCharge(this.grooveCharge);
-    return targetLevel === currentGrooveLevel
-      ? `Groove ${currentGrooveLevel}`
-      : `Groove ${currentGrooveLevel} -> ${targetLevel}`;
+    return `Groove ${currentGrooveLevel}`;
   }
 
   private getGrooveIntensity(currentGrooveLevel = this.currentMusicState.currentGrooveLevel): number {

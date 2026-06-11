@@ -25,6 +25,7 @@ export const SONG13_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("01i.ogg"),
         bars: 7,
+        grooveChangeAfterBars: 5,
       },
     },
     {
@@ -36,6 +37,7 @@ export const SONG13_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("02i.ogg"),
         bars: 7,
+        grooveChangeAfterBars: 5,
       },
     },
     {
@@ -47,6 +49,7 @@ export const SONG13_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("03i.ogg"),
         bars: 14,
+        grooveChangeAfterBars: 12,
       },
     },
     {
@@ -58,6 +61,7 @@ export const SONG13_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("04i.ogg"),
         bars: 7,
+        grooveChangeAfterBars: 5,
       },
     },
     {
@@ -69,6 +73,7 @@ export const SONG13_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("05i.ogg"),
         bars: 14,
+        grooveChangeAfterBars: 12,
       },
     },
     {

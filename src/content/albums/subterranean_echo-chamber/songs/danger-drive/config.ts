@@ -36,6 +36,7 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("02i.ogg"),
         bars: 3,
+        grooveChangeAfterBars: 1,
       },
     },
     {
@@ -47,6 +48,7 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("03i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 4,
       },
     },
     {
@@ -58,24 +60,23 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("04i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 4,
       },
     },
     {
       level: 5,
-      intro: {
-        src: assetUrl("05i.ogg"),
-        bars: 6,
-      },
-    },
-    {
-      level: 6,
       main: {
         src: assetUrl("06m.ogg"),
         bars: 6,
       },
+      intro: {
+        src: assetUrl("05i.ogg"),
+        bars: 6,
+        grooveChangeAfterBars: 4,
+      },
     },
     {
-      level: 7,
+      level: 6,
       main: {
         src: assetUrl("07m.ogg"),
         bars: 6,
@@ -83,10 +84,11 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("07i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 4,
       },
     },
     {
-      level: 8,
+      level: 7,
       main: {
         src: assetUrl("08m.ogg"),
         bars: 6,
@@ -94,10 +96,11 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("08i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 4,
       },
     },
     {
-      level: 9,
+      level: 8,
       main: {
         src: assetUrl("09m.ogg"),
         bars: 6,
@@ -105,10 +108,11 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("09i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 4,
       },
     },
     {
-      level: 10,
+      level: 9,
       main: {
         src: assetUrl("10m.ogg"),
         bars: 6,
@@ -116,10 +120,11 @@ export const SONG11_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("10i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 4,
       },
     },
     {
-      level: 11,
+      level: 10,
       intro: {
         src: assetUrl("11i.ogg"),
         bars: 7,

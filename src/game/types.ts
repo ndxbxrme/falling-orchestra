@@ -114,6 +114,7 @@ export interface OverlayState {
   grooveCharge: number;
   grooveTarget: number;
   grooveLevel: number;
+  grooveLevelTotal: number;
   grooveLayerLabel: string;
   activeFormationCaught: number;
   activeFormationRequired: number;

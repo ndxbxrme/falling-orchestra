@@ -17,7 +17,9 @@ export type SongMoodTag =
 export type LibraryRoute =
   | { view: "home" }
   | { view: "album"; albumId: string }
-  | { view: "favorites" };
+  | { view: "favorites" }
+  | { view: "artist"; artistId: string }
+  | { view: "genre"; genre: SongMoodTag };
 
 export interface ArtistManifest {
   id: string;
@@ -72,6 +74,8 @@ export interface SongManifest {
   coverArt?: string;
   recommendedWeight: number;
   availability: ContentAvailability;
+  backdropPreset?: string;
+  backdropParams?: Record<string, BackdropParamValue>;
   loadConfig: () => Promise<SongConfig>;
 }
 

@@ -63,7 +63,10 @@ export class UIOverlay {
       );
       this.setStyleValue(this.grooveBoostAlert, "--groove-boost-intensity", transition.intensity.toFixed(3));
     } else {
-      this.setText(this.grooveBoostText, String(state.grooveLevel).padStart(2, "0"));
+      this.setHtml(
+        this.grooveBoostText,
+        `<span class="groove-progress-current">${String(state.grooveLevel).padStart(2, "0")}</span><span class="groove-progress-total">/${String(state.grooveLevelTotal).padStart(2, "0")}</span>`,
+      );
       this.setStyleValue(this.grooveBoostAlert, "--groove-boost-intensity", "0");
     }
     this.setText(this.formationValue, `${state.activeFormationCaught} / ${state.activeFormationRequired}`);
@@ -76,7 +79,10 @@ export class UIOverlay {
         : "0%",
     );
     this.setClass(this.soloSection, "hidden", !state.soloModeActive);
-    this.setText(this.soloValue, `${state.soloMissesRemaining} misses left`);
+    this.setText(
+      this.soloValue,
+      `${state.soloMissesRemaining} ${state.soloMissesRemaining === 1 ? "miss" : "misses"} left`,
+    );
     this.setStyleValue(
       this.soloFill,
       "width",
@@ -231,6 +237,12 @@ export class UIOverlay {
   private setText(element: Element, value: string): void {
     if (element.textContent !== value) {
       element.textContent = value;
+    }
+  }
+
+  private setHtml(element: Element, value: string): void {
+    if (element.innerHTML !== value) {
+      element.innerHTML = value;
     }
   }
 

@@ -13,7 +13,7 @@ export const SONG3_CONFIG: SongConfig = {
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
-    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "pentatonicMajor" },
+    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "bluesMajor" },
   ],
   grooveLevels: [
     {
@@ -69,6 +69,7 @@ export const SONG3_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("06i.ogg"),
         bars: 8,
+        grooveChangeAfterBars: 6,
       },
     },
     {

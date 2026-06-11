@@ -131,6 +131,7 @@ export const SONG6_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("02i.ogg"),
         bars: 6,
+        grooveChangeAfterBars: 5,
       },
     },
     {
@@ -142,6 +143,7 @@ export const SONG6_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("03i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 3,
       },
     },
     {
@@ -153,6 +155,7 @@ export const SONG6_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("04i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 3,
       },
     },
     {
@@ -164,6 +167,7 @@ export const SONG6_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("05i.ogg"),
         bars: 12,
+        grooveChangeAfterBars: 11,
       },
     },
     {
@@ -175,6 +179,7 @@ export const SONG6_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("06i.ogg"),
         bars: 5,
+        grooveChangeAfterBars: 3,
       },
     },
     {

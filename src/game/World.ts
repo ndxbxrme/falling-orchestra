@@ -7,7 +7,6 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { Scene } from "@babylonjs/core/scene";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
-import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { getBackdropModuleById } from "../content/backdrops";
 import type {
   BackdropInstance,
@@ -52,20 +51,6 @@ interface PulseEffect {
   endAlpha: number;
 }
 
-interface BackdropFrame {
-  concrete: Mesh[];
-  lampMaterial: StandardMaterial;
-  reflectionMaterial: StandardMaterial;
-}
-
-interface BackdropLaser {
-  mesh: Mesh;
-  material: StandardMaterial;
-  direction: number;
-  baseX: number;
-  baseY: number;
-}
-
 interface SurfaceHit {
   positionX: number;
   positionY: number;
@@ -94,6 +79,12 @@ interface PooledBallVisual {
   active: boolean;
 }
 
+interface SoloLinkEffect {
+  active: boolean;
+  segments: Mesh[];
+  materials: StandardMaterial[];
+}
+
 interface WorldOptions {
   backdropPresetId?: string;
   backdropParams?: Record<string, BackdropParamValue>;
@@ -117,206 +108,6 @@ const MEGA_COLORS = [
   "#FFFF00",
   "#FFFFFF",
 ];
-
-const BACKDROP_VERTEX_SHADER = `
-precision highp float;
-
-attribute vec3 position;
-attribute vec2 uv;
-uniform mat4 worldViewProjection;
-
-varying vec2 vUV;
-
-void main(void) {
-  vUV = uv;
-  gl_Position = worldViewProjection * vec4(position, 1.0);
-}
-`;
-
-const BACKDROP_FRAGMENT_SHADER = `
-precision highp float;
-
-varying vec2 vUV;
-
-uniform float iTime;
-uniform float beatPulse;
-uniform float grooveIntensity;
-uniform vec2 resolution;
-uniform vec2 scrollDirection;
-uniform vec2 scrollOffset;
-
-mat2 rot(float angle) {
-  float s = sin(angle);
-  float c = cos(angle);
-  return mat2(c, -s, s, c);
-}
-
-float hash11(float p) {
-  return fract(sin(p * 127.1) * 43758.5453123);
-}
-
-float hash21(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  float a = hash21(i);
-  float b = hash21(i + vec2(1.0, 0.0));
-  float c = hash21(i + vec2(0.0, 1.0));
-  float d = hash21(i + vec2(1.0, 1.0));
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(vec2 p) {
-  float value = 0.0;
-  float amplitude = 0.5;
-  for (int i = 0; i < 5; i++) {
-    value += noise(p) * amplitude;
-    p = rot(0.45) * p * 2.04 + 4.7;
-    amplitude *= 0.52;
-  }
-  return value;
-}
-
-float stripe(float x, float width, float blur) {
-  return smoothstep(width + blur, width, abs(x));
-}
-
-void main(void) {
-  vec2 uv = vUV * 2.0 - 1.0;
-  float aspect = resolution.x / max(resolution.y, 1.0);
-  uv.x *= aspect;
-
-  float groove = clamp(grooveIntensity, 0.0, 1.0);
-  float level2 = smoothstep(0.18, 0.34, groove);
-  float level3 = smoothstep(0.46, 0.66, groove);
-  float level4 = smoothstep(0.76, 0.96, groove);
-  vec2 normalizedDirection = normalize(scrollDirection + vec2(0.0001, 0.0001));
-  float forwardSpeed = mix(0.0, 0.18, level2) + level3 * 0.28 + level4 * 0.36;
-  float travel = iTime * forwardSpeed + dot(scrollOffset, normalizedDirection) * 0.8;
-  float beatJolt = beatPulse * (0.018 + level4 * 0.05);
-  vec2 cam = vec2(
-    sin(iTime * 0.41) * 0.02 * level2 + sin(iTime * 1.3) * 0.006,
-    sin(iTime * 0.83) * 0.015 * level2 + beatJolt
-  );
-  uv += cam;
-
-  vec3 color = vec3(0.01, 0.012, 0.016);
-  vec3 fogColor = mix(vec3(0.028, 0.024, 0.02), vec3(0.018, 0.026, 0.034), level2);
-  fogColor = mix(fogColor, vec3(0.025, 0.032, 0.038), level3);
-  fogColor = mix(fogColor, vec3(0.06, 0.065, 0.074), beatPulse * 0.12 * level4);
-
-  float horizonY = -0.08 + level2 * 0.02;
-  float depth = 1.0 / max(uv.y + 1.18, 0.18);
-  vec2 world = vec2(uv.x * depth * 2.7, depth * 7.2 + travel * 5.2);
-  float corridorHalf = mix(2.3, 3.0, 0.35 + level2 * 0.2);
-  float wallMask = smoothstep(corridorHalf + 0.14, corridorHalf - 0.02, abs(world.x));
-  float floorMask = smoothstep(horizonY + 0.02, horizonY - 0.42, uv.y);
-  float ceilingMask = smoothstep(-0.92, -0.55, -uv.y);
-
-  vec3 floorBase = vec3(0.016, 0.017, 0.019);
-  vec3 wallBase = vec3(0.032, 0.032, 0.035);
-  vec3 ceilingBase = vec3(0.022, 0.024, 0.026);
-
-  float pillarSpacing = 2.8;
-  float pillarPhase = fract(world.y / pillarSpacing);
-  float pillarBand = smoothstep(0.08, 0.0, abs(pillarPhase - 0.18));
-  float pillarEdge = stripe(abs(world.x) - (corridorHalf - 0.18), 0.18, 0.09);
-  float pillars = pillarBand * pillarEdge * wallMask;
-
-  float beamPhase = fract(world.y / 1.6 + 0.16);
-  float beamBand = smoothstep(0.12, 0.0, abs(beamPhase - 0.15));
-  float ceilingBeams = beamBand * ceilingMask * smoothstep(0.82, 0.24, abs(uv.x));
-
-  float concreteNoise = fbm(world * vec2(0.65, 0.22));
-  wallBase += vec3(concreteNoise * 0.06);
-  floorBase += vec3(fbm(world * vec2(0.9, 0.32)) * 0.04);
-
-  vec3 lampWarm = vec3(1.0, 0.58, 0.16);
-  vec3 lampCold = vec3(0.56, 0.76, 1.0);
-  vec3 laserColor = mix(vec3(0.0, 0.9, 0.88), vec3(0.48, 1.0, 0.72), 0.45);
-
-  float lampSpacing = 2.15;
-  float lampPulse = fract(world.y / lampSpacing + 0.12);
-  float lampBand = smoothstep(0.1, 0.0, abs(lampPulse - 0.14));
-  float overheadCone = smoothstep(0.82, 0.0, abs(uv.x) + max(0.0, uv.y + 0.22) * 0.65);
-  float amberFlicker = mix(0.65, 1.18, step(0.72, hash11(floor(iTime * 11.0))));
-  float warmLamp = lampBand * overheadCone * (1.0 - level2) * amberFlicker;
-  float coldLamp = lampBand * overheadCone * level2 * (0.35 + beatPulse * (0.9 + level3 * 0.8));
-
-  float floorReflect = smoothstep(-0.12, -0.88, uv.y) * smoothstep(1.45, 0.12, abs(uv.x));
-  float reflectionBreakup = 0.5 + 0.5 * fbm(vec2(world.x * 1.6, world.y * 0.7));
-
-  float crowdBand = smoothstep(0.16, -0.08, abs(uv.x));
-  float crowdNoise = fbm(vec2(uv.x * 9.0, 4.0 + iTime * 0.03));
-  float crowd = smoothstep(0.38, 0.82, crowdNoise) * smoothstep(horizonY - 0.1, horizonY + 0.08, uv.y) * crowdBand * level2;
-
-  float rain = 0.0;
-  vec2 rainUv = uv * vec2(1.4, 0.8) + vec2(travel * 0.02, -iTime * mix(1.7, 3.8, groove));
-  for (int i = 0; i < 3; i++) {
-    vec2 layerUv = rainUv * (1.0 + float(i) * 0.6);
-    vec2 cell = floor(layerUv * vec2(18.0, 10.0) + float(i) * 7.3);
-    float lane = hash21(cell);
-    float streakX = fract(layerUv.x * 18.0 + lane) - 0.5;
-    float streakY = fract(layerUv.y * 10.0 + lane * 3.0);
-    float streak = smoothstep(0.06, 0.0, abs(streakX)) * smoothstep(1.0, 0.15, streakY);
-    rain += streak * (0.22 + 0.2 * float(i));
-  }
-  rain *= 0.12 + groove * 0.24;
-
-  float laserSweepA = sin(world.y * 0.22 + iTime * 1.7) * (0.65 + level4 * 0.28);
-  float laserSweepB = sin(world.y * 0.19 - iTime * 1.45 + 1.4) * (0.55 + level4 * 0.32);
-  float laserA = stripe(uv.x - laserSweepA * 0.38, 0.012 + beatPulse * 0.012, 0.03) * level3;
-  float laserB = stripe(uv.x + laserSweepB * 0.34, 0.014 + beatPulse * 0.015, 0.035) * level3;
-  float laserFog = smoothstep(-0.48, 0.16, uv.y) * (laserA + laserB) * (0.35 + level4 * 0.9);
-
-  vec3 wallColor = wallBase;
-  wallColor += vec3(0.08, 0.09, 0.1) * pillars;
-  wallColor += lampWarm * warmLamp * 0.22;
-  wallColor += lampCold * coldLamp * 0.28;
-
-  vec3 ceilingColor = ceilingBase;
-  ceilingColor += vec3(0.09, 0.1, 0.12) * ceilingBeams;
-  ceilingColor += lampWarm * warmLamp * 0.4;
-  ceilingColor += lampCold * coldLamp * 0.5;
-
-  vec3 floorColor = floorBase;
-  floorColor += lampWarm * warmLamp * floorReflect * reflectionBreakup * 0.42;
-  floorColor += lampCold * coldLamp * floorReflect * reflectionBreakup * 0.6;
-  floorColor += laserColor * laserFog * floorReflect * 0.42;
-
-  color = mix(color, wallColor, wallMask * (1.0 - floorMask));
-  color = mix(color, ceilingColor, ceilingMask * 0.85);
-  color = mix(color, floorColor, floorMask);
-
-  color += laserColor * laserFog;
-  color += vec3(0.05, 0.08, 0.1) * crowd;
-
-  float smoke = fbm(vec2(world.x * 0.35, world.y * 0.12 - iTime * 0.08));
-  float haze = smoothstep(0.22, 0.92, smoke) * (0.18 + groove * 0.32);
-  color = mix(color, fogColor, haze * smoothstep(0.95, -0.35, uv.y));
-
-  color += rain * vec3(0.46, 0.52, 0.58);
-
-  float grime = fbm(uv * vec2(4.0, 7.2) + iTime * 0.05);
-  color *= 0.88 + grime * 0.16;
-
-  float scan = sin(vUV.y * resolution.y * 1.22) * 0.5 + 0.5;
-  color *= 0.92 + scan * 0.08;
-
-  float vignette = smoothstep(1.6, 0.38, length(vec2(uv.x * 0.82, uv.y * 1.08)));
-  color *= vignette;
-
-  float strobe = beatPulse * level4 * 0.38;
-  color += lampCold * strobe * 0.35 + laserColor * strobe * 0.22;
-
-  gl_FragColor = vec4(color, 1.0);
-}
-`;
-
 export class World {
   readonly engine: Engine;
   readonly scene: Scene;
@@ -333,6 +124,7 @@ export class World {
   private baseSurfaces: Surface[] = [];
   private pulses: PulseEffect[] = [];
   private ballVisualPool: PooledBallVisual[] = [];
+  private soloLinkPool: SoloLinkEffect[] = [];
   private objectPool: MusicalObject[] = [];
   private objectById = new Map<number, MusicalObject>();
   private nextObjectId = 0;
@@ -340,8 +132,6 @@ export class World {
   private playerCoreMaterial: StandardMaterial;
   private playerMesh: Mesh;
   private playerSurface: Surface;
-  private backdropPlane?: Mesh;
-  private backdropMaterial?: ShaderMaterial;
   private backdropTime = 0;
   private backdropBeatPulse = 0;
   private backdropGrooveIntensity = 0;
@@ -351,8 +141,6 @@ export class World {
   private backdropScrollDirection = new Vector2(0.78, -0.24);
   private backdropTargetScrollDirection = new Vector2(0.78, -0.24);
   private backdropScrollOffset = new Vector2(0, 0);
-  private backdropFrames: BackdropFrame[] = [];
-  private backdropLasers: BackdropLaser[] = [];
   private playfieldDecor?: PlayfieldDecor;
   private cameraBasePosition = new Vector3(0, 0, -18);
   private playerWidth: number = GAME_CONFIG.playerWidth;
@@ -360,7 +148,6 @@ export class World {
   private previousPositionScratch = new Vector2();
   private backdropModule?: BackdropModule;
   private backdropInstance?: BackdropInstance;
-  private activeLegacyBackdropId: string | null = null;
   private backdropParams: Record<string, BackdropParamValue>;
   private backdropGrooveLevel = 1;
   private backdropTotalGrooveLevels = 1;
@@ -392,15 +179,8 @@ export class World {
       camera: this.camera,
       params: this.backdropParams,
       getBounds: () => this.bounds,
-      activateLegacyBuiltIn: (backdropId: string) => {
-        this.activeLegacyBackdropId = backdropId;
-      },
     });
-
-    if (this.activeLegacyBackdropId === "brutalist-club") {
-      this.createBackdrop();
-      this.createPlayfieldDecor();
-    }
+    this.createPlayfieldDecor();
     this.playerMesh = this.createPlayerAvatar();
     this.playerSurface = this.createPlayerSurface();
     this.resize();
@@ -424,28 +204,18 @@ export class World {
     const deltaSeconds = this.engine.getDeltaTime() * 0.001;
     this.backdropTime += deltaSeconds;
 
-    if (this.backdropMaterial) {
-      const smoothing = Math.min(1, deltaSeconds * 2.2);
-      const powerDown = 1 - this.endingIntensity * 0.45;
-      const scrollSpeed = (0.045 + this.backdropGrooveIntensity * 0.035) * powerDown;
-      this.backdropScrollDirection.x +=
-        (this.backdropTargetScrollDirection.x - this.backdropScrollDirection.x) * smoothing;
-      this.backdropScrollDirection.y +=
-        (this.backdropTargetScrollDirection.y - this.backdropScrollDirection.y) * smoothing;
-      this.backdropScrollOffset.x += this.backdropScrollDirection.x * deltaSeconds * scrollSpeed;
-      this.backdropScrollOffset.y += this.backdropScrollDirection.y * deltaSeconds * scrollSpeed;
-      this.backdropMaterial.setFloat("iTime", this.backdropTime);
-      this.backdropMaterial.setFloat("beatPulse", this.backdropBeatPulse);
-      this.backdropMaterial.setFloat("grooveIntensity", this.backdropGrooveIntensity * (1 - this.endingProgress * 0.22));
-      this.backdropMaterial.setVector2("scrollDirection", this.backdropScrollDirection);
-      this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
-    }
+    const smoothing = Math.min(1, deltaSeconds * 2.2);
+    const powerDown = 1 - this.endingIntensity * 0.45;
+    const scrollSpeed = (0.045 + this.backdropGrooveIntensity * 0.035) * powerDown;
+    this.backdropScrollDirection.x +=
+      (this.backdropTargetScrollDirection.x - this.backdropScrollDirection.x) * smoothing;
+    this.backdropScrollDirection.y +=
+      (this.backdropTargetScrollDirection.y - this.backdropScrollDirection.y) * smoothing;
+    this.backdropScrollOffset.x += this.backdropScrollDirection.x * deltaSeconds * scrollSpeed;
+    this.backdropScrollOffset.y += this.backdropScrollDirection.y * deltaSeconds * scrollSpeed;
 
-    if (this.activeLegacyBackdropId === "brutalist-club") {
-      this.syncBackdropArchitecture();
-      this.syncPlayfieldDecor();
-      this.syncCameraMotion();
-    }
+    this.syncPlayfieldDecor();
+    this.syncCameraMotion();
 
     this.backdropInstance?.update({
       elapsedTimeSeconds: this.backdropTime,
@@ -455,6 +225,10 @@ export class World {
       grooveIntensity: this.backdropGrooveIntensity,
       beatPulse: this.backdropBeatPulse,
       pulsePhase: this.backdropTime,
+      scrollDirectionX: this.backdropScrollDirection.x,
+      scrollDirectionY: this.backdropScrollDirection.y,
+      scrollOffsetX: this.backdropScrollOffset.x,
+      scrollOffsetY: this.backdropScrollOffset.y,
       transitionState: this.transitionState,
       endingProgress: this.endingProgress,
       endingIntensity: this.endingIntensity,
@@ -468,6 +242,8 @@ export class World {
       object.mesh.position.set(renderX, renderY, 0);
       object.coreMesh.position.set(renderX, renderY, -0.06);
     }
+
+    this.syncSoloLinks(alpha);
 
     this.scene.render();
   }
@@ -490,9 +266,6 @@ export class World {
     };
 
     this.applyCameraFrame();
-    if (this.activeLegacyBackdropId === "brutalist-club") {
-      this.resizeBackdrop();
-    }
     this.backdropInstance?.resize(this.bounds);
 
     this.rebuildBaseSurfaces();
@@ -517,6 +290,9 @@ export class World {
       visual.outer.dispose();
       visual.core.dispose();
     });
+    this.soloLinkPool.forEach((link) => {
+      link.segments.forEach((segment) => segment.dispose());
+    });
     this.backdropInstance?.dispose();
     this.scene.dispose();
     this.engine.dispose();
@@ -534,6 +310,10 @@ export class World {
     for (const pulse of this.pulses) {
       pulse.active = false;
       pulse.mesh.setEnabled(false);
+    }
+    for (const link of this.soloLinkPool) {
+      link.active = false;
+      link.segments.forEach((segment) => segment.setEnabled(false));
     }
     this.transitionState = { kind: "none" };
     this.endingProgress = 0;
@@ -829,191 +609,6 @@ export class World {
     this.camera.orthoBottom = -halfHeight;
   }
 
-  private createBackdrop(): void {
-    this.backdropPlane = MeshBuilder.CreatePlane("backdrop-shader-plane", {
-      width: 2,
-      height: 2,
-    }, this.scene);
-    this.backdropPlane.position.set(0, 0, 9.4);
-    this.backdropMaterial = new ShaderMaterial(
-      "backdrop-shader-material",
-      this.scene,
-      {
-        vertexSource: BACKDROP_VERTEX_SHADER,
-        fragmentSource: BACKDROP_FRAGMENT_SHADER,
-        spectorName: "backdropPulse",
-      },
-      {
-        attributes: ["position", "uv"],
-        uniforms: [
-          "worldViewProjection",
-          "iTime",
-          "beatPulse",
-          "grooveIntensity",
-          "resolution",
-          "scrollDirection",
-          "scrollOffset",
-        ],
-      },
-    );
-    this.backdropMaterial.backFaceCulling = false;
-    this.backdropMaterial.setFloat("iTime", 0);
-    this.backdropMaterial.setFloat("beatPulse", 0);
-    this.backdropMaterial.setFloat("grooveIntensity", 0);
-    this.backdropMaterial.setVector2(
-      "resolution",
-      new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()),
-    );
-    this.backdropMaterial.setVector2("scrollDirection", this.backdropScrollDirection);
-    this.backdropMaterial.setVector2("scrollOffset", this.backdropScrollOffset);
-    this.backdropPlane.material = this.backdropMaterial;
-    this.backdropPlane.visibility = 0.62;
-
-    const fogBand = MeshBuilder.CreatePlane("backdrop-fog-band", {
-      width: 54,
-      height: 10,
-    }, this.scene);
-    fogBand.position.set(0, -6.8, 8);
-    fogBand.material = this.createFlatMaterial("backdrop-fog-band-material", "#0a1116", 0.42);
-
-    const frameCount = 6;
-    for (let index = 0; index < frameCount; index += 1) {
-      const scale = 1 - index * 0.1;
-      const halfWidth = 10.5 * scale;
-      const halfHeight = 6.9 * scale;
-      const beamThickness = 0.9 * scale;
-      const pillarWidth = 1.18 * scale;
-      const frameZ = 8.75 + index * 0.06;
-      const concreteAlpha = 0.58 - index * 0.035;
-      const concreteMaterial = this.createFlatMaterial(
-        `backdrop-frame-${index}-concrete`,
-        index === 0 ? "#565961" : "#3d4148",
-        concreteAlpha,
-      );
-
-      const leftPillar = MeshBuilder.CreateBox(`backdrop-frame-${index}-left`, {
-        width: pillarWidth,
-        height: halfHeight * 2,
-        depth: 0.2,
-      }, this.scene);
-      leftPillar.position.set(-halfWidth + pillarWidth * 0.5, 0.2 - index * 0.08, frameZ);
-      leftPillar.material = concreteMaterial;
-
-      const rightPillar = MeshBuilder.CreateBox(`backdrop-frame-${index}-right`, {
-        width: pillarWidth,
-        height: halfHeight * 2,
-        depth: 0.2,
-      }, this.scene);
-      rightPillar.position.set(halfWidth - pillarWidth * 0.5, 0.2 - index * 0.08, frameZ);
-      rightPillar.material = concreteMaterial;
-
-      const topBeam = MeshBuilder.CreateBox(`backdrop-frame-${index}-top`, {
-        width: halfWidth * 2,
-        height: beamThickness,
-        depth: 0.2,
-      }, this.scene);
-      topBeam.position.set(0, halfHeight - beamThickness * 0.5 - index * 0.1, frameZ);
-      topBeam.material = concreteMaterial;
-
-      const insetLeft = MeshBuilder.CreateBox(`backdrop-frame-${index}-inset-left`, {
-        width: 0.38 * scale,
-        height: halfHeight * 1.6,
-        depth: 0.2,
-      }, this.scene);
-      insetLeft.position.set(-halfWidth + 2.6 * scale, 0.05 - index * 0.06, frameZ - 0.01);
-      insetLeft.material = concreteMaterial;
-
-      const insetRight = MeshBuilder.CreateBox(`backdrop-frame-${index}-inset-right`, {
-        width: 0.38 * scale,
-        height: halfHeight * 1.6,
-        depth: 0.2,
-      }, this.scene);
-      insetRight.position.set(halfWidth - 2.6 * scale, 0.05 - index * 0.06, frameZ - 0.01);
-      insetRight.material = concreteMaterial;
-
-      const lampMaterial = this.createFlatMaterial(
-        `backdrop-frame-${index}-lamp`,
-        index === 0 ? "#d07a2f" : "#5a7f9c",
-        0.22 + index * 0.025,
-      );
-      const lamp = MeshBuilder.CreatePlane(`backdrop-frame-${index}-lamp`, {
-        width: halfWidth * 0.9,
-        height: 0.22 * scale,
-      }, this.scene);
-      lamp.position.set(0, halfHeight - 1.05 * scale - index * 0.1, frameZ - 0.03);
-      lamp.material = lampMaterial;
-
-      const reflectionMaterial = this.createFlatMaterial(
-        `backdrop-frame-${index}-reflection`,
-        index === 0 ? "#9f6734" : "#315269",
-        0.1,
-      );
-      const reflection = MeshBuilder.CreatePlane(`backdrop-frame-${index}-reflection`, {
-        width: halfWidth * 1.55,
-        height: 0.52 * scale,
-      }, this.scene);
-      reflection.position.set(0, -halfHeight + 1.32 * scale, frameZ - 0.04);
-      reflection.material = reflectionMaterial;
-
-      this.backdropFrames.push({
-        concrete: [leftPillar, rightPillar, topBeam, insetLeft, insetRight],
-        lampMaterial,
-        reflectionMaterial,
-      });
-    }
-
-    const backWallMaterial = this.createFlatMaterial("backdrop-back-wall-material", "#474b52", 0.34);
-    const backWall = MeshBuilder.CreatePlane("backdrop-back-wall", {
-      width: 7.2,
-      height: 5.4,
-    }, this.scene);
-    backWall.position.set(0, 0.1, 9.38);
-    backWall.material = backWallMaterial;
-    this.backdropFrames.push({
-      concrete: [backWall],
-      lampMaterial: this.createFlatMaterial("backdrop-back-wall-dummy-lamp", "#000000", 0),
-      reflectionMaterial: this.createFlatMaterial("backdrop-back-wall-dummy-reflect", "#000000", 0),
-    });
-
-    for (const direction of [-1, 1]) {
-      const laserMaterial = this.createFlatMaterial(
-        `backdrop-laser-${direction > 0 ? "right" : "left"}`,
-        direction > 0 ? "#57ffe0" : "#7de86f",
-        0,
-      );
-      const laser = MeshBuilder.CreatePlane(`backdrop-laser-${direction > 0 ? "right" : "left"}`, {
-        width: 0.18,
-        height: 28,
-      }, this.scene);
-      laser.position.set(direction * 4.2, 0.2, 8.72);
-      laser.rotation.z = direction * 0.22;
-      laser.material = laserMaterial;
-      this.backdropLasers.push({
-        mesh: laser,
-        material: laserMaterial,
-        direction,
-        baseX: direction * 4.2,
-        baseY: 0.2,
-      });
-    }
-  }
-
-  private resizeBackdrop(): void {
-    if (!this.backdropPlane || !this.backdropMaterial) {
-      return;
-    }
-
-    this.backdropPlane.scaling.set(
-      (this.bounds.right - this.bounds.left) * 0.68,
-      (this.bounds.top - this.bounds.bottom) * 0.72,
-      1,
-    );
-    this.backdropMaterial.setVector2(
-      "resolution",
-      new Vector2(this.engine.getRenderWidth(), this.engine.getRenderHeight()),
-    );
-  }
-
   private createPlayfieldDecor(): void {
     const centerTicks: Mesh[] = [];
     const centerTickMaterials: StandardMaterial[] = [];
@@ -1093,58 +688,6 @@ export class World {
       lowerGuides,
       lowerGuideMaterials,
     };
-  }
-
-  private syncBackdropArchitecture(): void {
-    const groove = this.backdropGrooveIntensity;
-    const buildLift = this.transitionState.kind === "grooveBuild" ? this.transitionState.intensity * 0.22 : 0;
-    const landingLift = this.transitionState.kind === "grooveLanding" ? this.transitionState.intensity * 0.48 : 0;
-    const powerDown = 1 - this.endingIntensity * 0.34;
-    const level2 = clamp((groove - 0.18) / 0.24, 0, 1);
-    const level3 = clamp((groove - 0.46) / 0.2, 0, 1);
-    const level4 = clamp((groove - 0.76) / 0.2, 0, 1);
-    const amber = hex("#9f5218");
-    const steel = hex("#5e768c");
-    const laserA = hex("#57ffe0");
-    const laserB = hex("#7de86f");
-
-    this.backdropFrames.forEach((frame, index) => {
-      const visibilityRamp = clamp((0.22 + groove * 0.55 - index * 0.05 + buildLift * 0.08 + landingLift * 0.12) * powerDown, 0.12, 0.72);
-      frame.concrete.forEach((mesh) => {
-        mesh.visibility = visibilityRamp;
-      });
-
-      const lampColor = Color3.Lerp(amber, steel, level2);
-      frame.lampMaterial.diffuseColor = lampColor;
-      frame.lampMaterial.emissiveColor = lampColor.scale(
-        (0.34 + this.backdropBeatPulse * (0.32 + level3 * 0.24) + buildLift * 0.24 + landingLift * 0.42) * powerDown,
-      );
-      frame.lampMaterial.alpha = (0.2 + level2 * 0.1 + this.backdropBeatPulse * 0.08) * powerDown;
-
-      const reflectionColor = Color3.Lerp(hex("#6b431e"), hex("#2d4657"), level2);
-      frame.reflectionMaterial.diffuseColor = reflectionColor;
-      frame.reflectionMaterial.emissiveColor = reflectionColor.scale(
-        (0.14 + this.backdropBeatPulse * 0.12) * powerDown,
-      );
-      frame.reflectionMaterial.alpha = (0.06 + level2 * 0.05 + level3 * 0.04) * powerDown;
-    });
-
-    this.backdropLasers.forEach((laser, index) => {
-      const sweep = Math.sin(this.backdropTime * (1.4 + index * 0.22) + index * 1.4);
-      laser.mesh.rotation.z = laser.direction * (0.12 + level3 * 0.42 + sweep * 0.08);
-      laser.mesh.position.x = laser.baseX + laser.direction * sweep * 1.2;
-      laser.mesh.position.y = laser.baseY;
-      laser.material.diffuseColor = index === 0 ? laserA : laserB;
-      laser.material.emissiveColor = (index === 0 ? laserA : laserB).scale(
-        level3 * (0.3 + this.backdropBeatPulse * (0.7 + level4 * 0.8) + buildLift * 0.4 + landingLift * 0.68) * powerDown,
-      );
-      laser.material.alpha = (level3 * 0.3 + level4 * 0.28 + this.backdropBeatPulse * level4 * 0.18 + buildLift * 0.12 + landingLift * 0.24) * powerDown;
-      laser.mesh.visibility = level3 * powerDown;
-    });
-
-    if (this.backdropPlane) {
-      this.backdropPlane.visibility = 0.62 - this.endingProgress * 0.16;
-    }
   }
 
   private syncPlayfieldDecor(): void {
@@ -1391,7 +934,11 @@ export class World {
       tessellation: 28,
     }, this.scene);
     halo.parent = core;
-    halo.material = this.createFlatMaterial(`${name}-halo-material`, coreMaterial.diffuseColor.toHexString(), SIGNAL_HALO_ALPHA);
+    halo.material = this.createFlatMaterial(
+      `${name}-halo-material`,
+      coreMaterial.diffuseColor.toHexString(),
+      isSolo ? 0.34 : SIGNAL_HALO_ALPHA,
+    );
     halo.position.z = 0.03;
 
     const centerDot = MeshBuilder.CreateDisc(`${name}-center-dot`, {
@@ -1425,6 +972,54 @@ export class World {
     const bottomCross = topCross.clone(`${name}-cross-bottom`);
     bottomCross.parent = core;
     bottomCross.position.y = -radius * (isSolo ? 1.08 : 0.82);
+
+    if (isSolo) {
+      const outerHaloRing = MeshBuilder.CreateTorus(`${name}-outer-halo-ring`, {
+        diameter: radius * 3.02,
+        thickness: Math.max(0.018, radius * 0.05),
+        tessellation: 32,
+      }, this.scene);
+      outerHaloRing.parent = outer;
+      outerHaloRing.rotation.x = Math.PI * 0.5;
+      outerHaloRing.position.z = 0.015;
+      outerHaloRing.material = this.createFlatMaterial(
+        `${name}-outer-halo-ring-material`,
+        outerMaterial.diffuseColor.toHexString(),
+        0.22,
+      );
+
+      for (const [index, angle] of [Math.PI * 0.25, Math.PI * 0.75, Math.PI * 1.25, Math.PI * 1.75].entries()) {
+        const blade = MeshBuilder.CreatePlane(`${name}-blade-${index}`, {
+          width: radius * 0.82,
+          height: Math.max(0.018, radius * 0.06),
+        }, this.scene);
+        blade.parent = outer;
+        blade.material = this.createFlatMaterial(
+          `${name}-blade-material-${index}`,
+          outerMaterial.diffuseColor.toHexString(),
+          0.76,
+        );
+        blade.position.set(
+          Math.cos(angle) * radius * 1.52,
+          Math.sin(angle) * radius * 1.52,
+          0.035,
+        );
+        blade.rotation.z = angle;
+      }
+
+      const coreDiamond = MeshBuilder.CreatePlane(`${name}-core-diamond`, {
+        width: radius * 0.62,
+        height: radius * 0.62,
+      }, this.scene);
+      coreDiamond.parent = core;
+      coreDiamond.material = this.createFlatMaterial(
+        `${name}-core-diamond-material`,
+        "#fff8ec",
+        0.42,
+      );
+      coreDiamond.rotation.z = Math.PI * 0.25;
+      coreDiamond.position.z = -0.01;
+    }
 
     outer.metadata = {
       tintMaterials: [outerMaterial, reticleRing.material, ...outer.getChildMeshes().map((child) => child.material).filter((material): material is StandardMaterial => material instanceof StandardMaterial)],
@@ -1475,6 +1070,138 @@ export class World {
     pooled.active = false;
     pooled.outer.setEnabled(false);
     pooled.core.setEnabled(false);
+  }
+
+  private syncSoloLinks(interpolationAlpha: number): void {
+    const soloObjects = this.objects.filter((object) => object.type === "solo");
+    if (soloObjects.length < 2) {
+      this.hideSoloLinks();
+      return;
+    }
+
+    const renderPositions = soloObjects
+      .map((object) => ({
+        x: object.previousPosition.x + (object.position.x - object.previousPosition.x) * interpolationAlpha,
+        y: object.previousPosition.y + (object.position.y - object.previousPosition.y) * interpolationAlpha,
+      }))
+      .sort((a, b) => a.x - b.x);
+
+    let linkIndex = 0;
+    for (let startIndex = 0; startIndex < renderPositions.length - 1; startIndex += 1) {
+      for (let endIndex = startIndex + 1; endIndex < renderPositions.length; endIndex += 1) {
+        const link = this.acquireSoloLink(linkIndex);
+        this.updateSoloLink(link, renderPositions[startIndex], renderPositions[endIndex], linkIndex);
+        linkIndex += 1;
+      }
+    }
+
+    for (let index = linkIndex; index < this.soloLinkPool.length; index += 1) {
+      const link = this.soloLinkPool[index];
+      link.active = false;
+      link.segments.forEach((segment) => segment.setEnabled(false));
+    }
+  }
+
+  private hideSoloLinks(): void {
+    for (const link of this.soloLinkPool) {
+      if (!link.active) {
+        continue;
+      }
+      link.active = false;
+      link.segments.forEach((segment) => segment.setEnabled(false));
+    }
+  }
+
+  private acquireSoloLink(index: number): SoloLinkEffect {
+    let link = this.soloLinkPool[index];
+    if (link) {
+      link.active = true;
+      return link;
+    }
+
+    const segments: Mesh[] = [];
+    const materials: StandardMaterial[] = [];
+    for (let segmentIndex = 0; segmentIndex < 5; segmentIndex += 1) {
+      const segment = MeshBuilder.CreatePlane(`solo-link-${index}-${segmentIndex}`, {
+        width: 1,
+        height: 1,
+      }, this.scene);
+      const material = this.createFlatMaterial(
+        `solo-link-${index}-${segmentIndex}-material`,
+        segmentIndex % 2 === 0 ? "#ffd27c" : "#fff6cc",
+        0.7,
+      );
+      segment.material = material;
+      segment.position.z = 0.18 - segmentIndex * 0.002;
+      segment.setEnabled(false);
+      segments.push(segment);
+      materials.push(material);
+    }
+
+    link = {
+      active: true,
+      segments,
+      materials,
+    };
+    this.soloLinkPool.push(link);
+    return link;
+  }
+
+  private updateSoloLink(
+    link: SoloLinkEffect,
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    linkIndex: number,
+  ): void {
+    const deltaX = end.x - start.x;
+    const deltaY = end.y - start.y;
+    const length = Math.hypot(deltaX, deltaY);
+    if (length < 0.3) {
+      link.segments.forEach((segment) => segment.setEnabled(false));
+      return;
+    }
+
+    const normalX = -(deltaY / length);
+    const normalY = deltaX / length;
+    const pulse = 0.72 + Math.sin(this.backdropTime * 8.4 + linkIndex * 0.9) * 0.18 + this.backdropBeatPulse * 0.12;
+    const amplitude = Math.min(0.28 + this.backdropBeatPulse * 0.18, length * 0.14);
+    const segmentCount = link.segments.length;
+
+    let currentX = start.x;
+    let currentY = start.y;
+    for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+      const progress = segmentIndex / segmentCount;
+      const nextProgress = (segmentIndex + 1) / segmentCount;
+      const baseEndX = start.x + deltaX * nextProgress;
+      const baseEndY = start.y + deltaY * nextProgress;
+      const offsetDirection = segmentIndex % 2 === 0 ? 1 : -1;
+      const wobble = Math.sin(this.backdropTime * 13.5 + linkIndex * 1.7 + segmentIndex * 0.8);
+      const offset =
+        segmentIndex === segmentCount - 1
+          ? 0
+          : amplitude * offsetDirection * (0.72 + this.backdropBeatPulse * 0.3) * wobble;
+      const nextX = segmentIndex === segmentCount - 1 ? end.x : baseEndX + normalX * offset;
+      const nextY = segmentIndex === segmentCount - 1 ? end.y : baseEndY + normalY * offset;
+      const segmentDeltaX = nextX - currentX;
+      const segmentDeltaY = nextY - currentY;
+      const segmentLength = Math.hypot(segmentDeltaX, segmentDeltaY);
+      const midpointX = (currentX + nextX) * 0.5;
+      const midpointY = (currentY + nextY) * 0.5;
+      const segment = link.segments[segmentIndex];
+      const material = link.materials[segmentIndex];
+
+      segment.setEnabled(true);
+      segment.position.set(midpointX, midpointY, 0.16 - progress * 0.01);
+      segment.rotation.z = Math.atan2(segmentDeltaY, segmentDeltaX);
+      segment.scaling.set(segmentLength * 1.06, 0.06 + pulse * 0.028 + progress * 0.01, 1);
+      material.alpha = clamp((0.3 + pulse * 0.42) * (1 - progress * 0.1), 0.22, 0.82);
+      material.emissiveColor = hex(segmentIndex % 2 === 0 ? "#ffb347" : "#fff7d1").scale(0.12 + pulse * 0.14);
+
+      currentX = nextX;
+      currentY = nextY;
+    }
+
+    link.active = true;
   }
 
   private rebuildBaseSurfaces(): void {

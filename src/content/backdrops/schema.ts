@@ -14,6 +14,10 @@ export interface BackdropRuntimeInputs {
   grooveIntensity: number;
   beatPulse: number;
   pulsePhase: number;
+  scrollDirectionX: number;
+  scrollDirectionY: number;
+  scrollOffsetX: number;
+  scrollOffsetY: number;
   transitionState: TransitionState;
   endingProgress: number;
   endingIntensity: number;
@@ -26,7 +30,6 @@ export interface BackdropContext {
   camera: FreeCamera;
   params: Record<string, BackdropParamValue>;
   getBounds: () => ArenaBounds;
-  activateLegacyBuiltIn: (backdropId: string) => void;
 }
 
 export interface BackdropInstance {

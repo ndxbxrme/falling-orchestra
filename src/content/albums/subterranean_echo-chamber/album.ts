@@ -15,7 +15,7 @@ export const SUBTERRANEAN_ECHO_CHAMBER_ALBUM: AlbumManifest = {
     text: "#eaf7ff",
     background: "#081522",
     panel: "#101b29",
-    backdropPreset: "gatecrasher-reactor",
+    backdropPreset: "rain-window",
   },
   tags: [
     "deep house",

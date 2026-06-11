@@ -180,6 +180,79 @@ Notes:
 - keep your original artwork elsewhere if you want a master copy
 - `ffmpeg` must be available on your machine
 
+### Song Preview Rendering
+
+You can now render offline song previews using the same structure as the in-library preview player:
+
+- one `intro` per groove level
+- three `main` loops per groove level
+- final ending intro included if the song has one
+
+Render a whole album:
+
+```bash
+npm run render:song-preview -- --album-id sector-seven_artificial-heat
+```
+
+Render one song:
+
+```bash
+npm run render:song-preview -- --album-id sector-seven_artificial-heat --song-slug burning
+```
+
+Useful flags:
+
+- `--output-root <dir>`: defaults to `tmp/rendered-previews`
+- `--main-repeats <n>`: defaults to `3`
+- `--format wav|mp3`: defaults to `wav`
+- `--dry-run`: print the planned clip sequence without rendering
+
+Notes:
+
+- this script reads the packaged `config.ts` files, not the browser runtime
+- it trims each clip to its authored bar duration before concatenating
+- `ffmpeg` must be available on your machine
+
+### Local Audio Metadata POC
+
+There is now a narrow proof-of-concept path for trying local audio-model metadata generation.
+
+1. Prepare a short `16kHz` mono WAV excerpt:
+
+```bash
+npm run prepare:audio-excerpt -- --input path/to/song-preview.wav
+```
+
+Useful flags:
+
+- `--start <seconds>`: choose where the excerpt begins
+- `--duration <seconds>`: default `30`
+- `--output <path>`: write to a custom location
+
+2. Run the local metadata probe:
+
+```bash
+npm run generate:song-metadata -- path/to/song-preview_16000hz_excerpt.wav
+```
+
+Notes:
+
+- this currently defaults to:
+  - model: `/mnt/d/AI/models/Qwen2-Audio-7B-Instruct-Q4_K_M.gguf`
+  - mmproj: `/mnt/d/AI/models/Qwen2-Audio-7B-Instruct.mmproj-f16.gguf`
+- the `mmproj` file is required for local multimodal runs
+- `llama_cpp` must be installed in a build that actually exposes the needed multimodal handler
+- the current script uses the existing local audio compatibility hack path and should be treated as experimental
+- output is printed twice:
+  - raw model text
+  - best-effort parsed JSON
+
+Useful flags:
+
+- `--prompt "..."`: override the metadata prompt
+- `--chat-handler <ClassName>`: try a different `llama_cpp.llama_chat_format` handler
+- `--raw-output path/to/response.txt`: keep the unparsed output for inspection
+
 ### Song Hydration
 
 Once a song package exists and real loop files have been copied into its `audio/` folder, you can hydrate `config.ts` from the clips.
@@ -214,6 +287,194 @@ The hydrator currently rewrites:
 - `grooveLevels`
 
 It leaves `harmonyTimeline`, `impactPalette`, and other hand-authored config sections alone.
+
+### Content Override Reference
+
+These are the main places you can override content behavior once a song package has been scaffolded and hydrated.
+
+#### Album (`album.ts`)
+
+Album manifests mostly control library metadata and the default visual theme for every song in the album.
+
+Important optional fields:
+
+- `year?`
+- `description?`
+- `coverArt?`
+- `recommendedSongId?`
+
+Album theme fields:
+
+- `theme.accent`
+- `theme.accentSoft`
+- `theme.text`
+- `theme.background`
+- `theme.panel`
+- `theme.backdropPreset`
+- `theme.backdropParams?`
+
+`theme.backdropParams` is a shallow key/value bag (`string | number | boolean`) for preset-specific overrides such as:
+
+- `panoramaUrl`
+- `yawCenterDegrees`
+
+Example:
+
+```ts
+theme: {
+  accent: "#d97c52",
+  accentSoft: "#5e2f24",
+  text: "#f6efe8",
+  background: "#0f0d0b",
+  panel: "#181310",
+  backdropPreset: "skybox-360",
+  backdropParams: {
+    panoramaUrl: sunsetPanorama,
+    yawCenterDegrees: 24,
+  },
+}
+```
+
+#### Song Manifest (`song.ts`)
+
+Song manifests are the lightweight library-facing layer. They control metadata, recommendation weighting, and optional per-song visual overrides.
+
+Important optional fields:
+
+- `durationLabel?`
+- `difficulty?`
+- `energy?`
+- `coverArt?`
+- `backdropPreset?`
+- `backdropParams?`
+
+Notes:
+
+- `moodTags` and `recommendedWeight` are required, even though they are often hand-authored later.
+- `backdropPreset?` overrides the album default for that song only.
+- `backdropParams?` shallow-override the album `theme.backdropParams`.
+
+Example:
+
+```ts
+export const BURNING: SongManifest = {
+  id: "sector-seven_artificial-heat_burning",
+  slug: "burning",
+  title: "Burning",
+  artistId: "sector-seven",
+  albumId: "sector-seven_artificial-heat",
+  trackNumber: 3,
+  durationLabel: "5:42",
+  difficulty: 4,
+  energy: 5,
+  moodTags: ["driving", "heavy"],
+  recommendedWeight: 0.8,
+  availability: "included",
+  backdropParams: {
+    panoramaUrl: winterPanorama,
+    yawCenterDegrees: 90,
+  },
+  loadConfig: async () => (await import("./config")).BURNING_CONFIG,
+};
+```
+
+#### Song Config (`config.ts`)
+
+`config.ts` is the real playback/gameplay layer. This is where you tune transport, harmony, groove transitions, spawns, impact synth routing, and solo voice behavior.
+
+Top-level fields:
+
+- `transport`
+- `harmonyTimeline`
+- `grooveLevels`
+- `impactPalette?`
+- `soloVoice?`
+
+Useful optional top-level overrides:
+
+- `impactPalette?`
+  - full per-family impact synth/sample/routing override
+- `soloVoice?.baseGain?`
+- `soloVoice?.glideTime?`
+- `soloVoice?.pulseDivision?`
+- `soloVoice?.pulsePattern?`
+
+#### Groove Level (`grooveLevels[]`)
+
+Each groove level can optionally define:
+
+- `main?`
+- `intro?`
+- `completesSong?`
+- `spawnProfile?`
+
+Useful optional groove-level overrides:
+
+- `completesSong?: true`
+  - marks that groove as the final transmission / ending stage
+- `spawnProfile?.spawnInterval?`
+- `spawnProfile?.spawnPattern?`
+- `spawnProfile?.spawnCenter?`
+- `spawnProfile?.spawnWeights?`
+
+#### Loop Clip (`grooveLevels[n].intro` / `grooveLevels[n].main`)
+
+Each clip entry can optionally define:
+
+- `grooveChangeAfterBars?`
+- `harmonyStartBar?`
+- `harmonyTimeline?`
+
+The important one for transition timing is:
+
+- `grooveChangeAfterBars?`
+  - this controls the transition landing point
+  - for an `intro` clip, it is the number of bars to wait before the groove handoff lands on the target `main`
+  - if you wanted to change where a build lands, this is the field to edit
+
+The harmony helpers are:
+
+- `harmonyStartBar?`
+  - offset this clip into the song-level `harmonyTimeline`
+- `harmonyTimeline?`
+  - override harmony locally for this clip only instead of using the song-level timeline
+
+Example groove level:
+
+```ts
+{
+  level: 4,
+  intro: {
+    src: groove4Intro,
+    bars: 8,
+    grooveChangeAfterBars: 6,
+  },
+  main: {
+    src: groove4Main,
+    bars: 8,
+  },
+  spawnProfile: {
+    spawnInterval: 0.9,
+    spawnPattern: "alternate",
+    spawnCenter: 0.15,
+    spawnWeights: {
+      bell: 1,
+      spark: 2,
+      snare: 1,
+    },
+  },
+}
+```
+
+In practice the override order is:
+
+1. album theme backdrop defaults
+2. song backdrop overrides
+3. song-level config
+4. groove-level overrides
+5. clip-level overrides
+
+So if you are adjusting where a transition lands, you almost always want `grooveLevels[n].intro.grooveChangeAfterBars`.
 
 ### Harmony Defaults
 

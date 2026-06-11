@@ -13,7 +13,10 @@
     "scaffold:content": "python3 scripts/scaffold_content.py",
     "scaffold:backdrop": "python3 scripts/scaffold_content.py backdrop",
     "hydrate:song": "python3 scripts/hydrate_song_config.py",
-    "optimize:cover-art": "python3 scripts/optimize_album_art.py"
+    "optimize:cover-art": "python3 scripts/optimize_album_art.py",
+    "render:song-preview": "python3 scripts/render_song_previews.py",
+    "prepare:audio-excerpt": "python3 scripts/prepare_audio_excerpt.py",
+    "generate:song-metadata": "python3 scripts/generate_song_metadata.py"
   },
   "dependencies": {
     "@babylonjs/core": "^8.13.1"

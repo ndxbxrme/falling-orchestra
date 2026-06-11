@@ -564,8 +564,9 @@ input {
 }
 
 .compact-song-card,
-.album-card-hit,
-.song-row {
+.song-row,
+.album-card,
+.album-card-cover-hit {
   position: relative;
   padding: 18px;
   border: 1px solid rgba(126, 233, 239, 0.1);
@@ -573,7 +574,7 @@ input {
   text-align: left;
 }
 
-.album-card-hit,
+.album-card-cover-hit,
 .library-chip,
 .play-button,
 .play-link,
@@ -583,7 +584,7 @@ input {
 }
 
 .compact-song-card,
-.album-card-hit {
+.album-card {
   display: grid;
   gap: 10px;
 }
@@ -676,15 +677,52 @@ input {
   gap: 8px 12px;
 }
 
-.album-card-hit {
+.compact-song-library-lines {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  align-items: start;
   width: 100%;
+}
+
+.compact-library-link {
+  appearance: none;
   border: 0;
-  color: inherit;
+  padding: 0;
+  background: none;
+  color: rgba(234, 247, 255, 0.72);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+  text-align: left;
+  line-height: 1.18;
+  border-bottom: 1px solid transparent;
+}
+
+.compact-library-link:hover {
+  color: rgba(255, 202, 110, 0.96);
+  border-bottom-color: rgba(255, 202, 110, 0.42);
 }
 
 .album-card-copy {
   display: grid;
   gap: 10px;
+}
+
+.album-card {
+  width: min(100%, 420px);
+  justify-self: start;
+}
+
+.album-card-cover-hit {
+  width: 100%;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  display: block;
 }
 
 .album-card-cover,
@@ -711,6 +749,8 @@ input {
 .album-card-cover {
   aspect-ratio: 1;
   font-size: clamp(2.4rem, 6vw, 4.8rem);
+  width: 100%;
+  max-width: 420px;
 }
 
 .album-hero {
@@ -807,6 +847,58 @@ input {
   opacity: 0.88;
 }
 
+.inline-library-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(126, 233, 239, 0.28);
+}
+
+.inline-library-link:hover {
+  color: rgba(255, 202, 110, 0.96);
+  border-bottom-color: rgba(255, 202, 110, 0.42);
+}
+
+.album-artist-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0 0.42rem;
+  align-items: baseline;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.album-artist-separator {
+  color: rgba(180, 228, 244, 0.62);
+  flex: 0 0 auto;
+}
+
+.genre-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.genre-chip {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  border-color: rgba(126, 233, 239, 0.12);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.song-row .genre-chip-row {
+  margin-top: 8px;
+}
+
 .hero-preview-button {
   width: 42px;
   height: 42px;
@@ -830,12 +922,22 @@ input {
   pointer-events: none;
 }
 
+.session-blackout {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(255, 255, 255, 0.03), transparent 32%),
+    linear-gradient(180deg, rgba(2, 5, 10, 0.96), rgba(4, 8, 14, 0.985));
+  z-index: 0;
+}
+
 .session-chip-group {
   position: absolute;
   top: calc(20px + env(safe-area-inset-top));
   right: calc(20px + env(safe-area-inset-right));
   justify-content: flex-end;
   pointer-events: auto;
+  z-index: 2;
 }
 
 .session-now-playing {
@@ -848,6 +950,7 @@ input {
   gap: 14px;
   align-items: flex-end;
   pointer-events: none;
+  z-index: 2;
 }
 
 .session-now-playing-copy {
@@ -875,6 +978,7 @@ input {
   box-shadow: 0 30px 70px rgba(0, 0, 0, 0.32);
   text-align: center;
   pointer-events: none;
+  z-index: 3;
 }
 
 .track-transition-overlay h2 {
@@ -1130,7 +1234,7 @@ input {
     translate3d(calc(var(--groove-boost-intensity) * 6px), calc(var(--groove-boost-intensity) * -2px), 0);
 }
 
-.groove-boost-alert span {
+.groove-boost-alert > span {
   display: block;
   font-family: "Space Grotesk", "Avenir Next", sans-serif;
   font-size: clamp(4.6rem, 10vw, 8.8rem);
@@ -1145,11 +1249,30 @@ input {
     0 2px 10px rgba(0, 0, 0, 0.32);
 }
 
-.groove-boost-alert:not(.incoming) span {
+.groove-boost-alert:not(.incoming) > span {
   color: rgba(180, 228, 244, 0.92);
   text-shadow:
     0 0 4px rgba(180, 228, 244, 0.06),
     0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.groove-boost-alert:not(.incoming) > span {
+  display: flex;
+  align-items: baseline;
+  gap: 0.02em;
+}
+
+.groove-progress-current,
+.groove-progress-total {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.groove-progress-total {
+  margin-left: 0.08em;
+  font-size: 0.46em;
+  letter-spacing: -0.02em;
+  opacity: 0.68;
 }
 
 .flash-layer {
@@ -1771,6 +1894,52 @@ input {
 }
 
 @media (pointer: coarse), (max-width: 820px) {
+  .groove-boost-alert {
+    top: calc(18px + env(safe-area-inset-top));
+    width: min(58vw, 420px);
+    transform: scaleX(0.68);
+  }
+
+  .formation-strip.floating {
+    top: auto;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    width: min(340px, calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    transform: translateX(-50%);
+  }
+
+  .formation-strip.floating .formation-copy {
+    justify-content: center;
+  }
+
+  .formation-strip.floating .formation-copy strong {
+    font-size: clamp(1.2rem, 4.8vw, 1.8rem);
+    line-height: 0.88;
+  }
+
+  .formation-strip.floating .formation-copy span {
+    font-size: clamp(1rem, 3.8vw, 1.35rem);
+  }
+
+  .solo-strip.floating {
+    top: 66dvh;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    width: min(300px, calc(100vw - 40px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    transform: translateX(-50%);
+  }
+
+  .formation-section.floating,
+  .formation-strip.floating:not(.solo-strip) {
+    top: 34dvh;
+  }
+
+  .formation-strip.floating:not(.solo-strip) {
+    width: min(360px, calc(100vw - 40px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  }
+
   .quick-dock {
     display: flex;
     flex-wrap: wrap;
@@ -1909,8 +2078,24 @@ input {
   }
 
   .formation-strip.floating {
-    top: calc(92px + env(safe-area-inset-top));
+    top: auto;
+    left: 50%;
+    right: auto;
+    bottom: auto;
     width: min(320px, calc(100vw - 24px));
+    transform: translateX(-50%);
+  }
+
+  .formation-strip.floating:not(.solo-strip) {
+    top: 34dvh;
+  }
+
+  .solo-strip.floating {
+    top: 66dvh;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    width: min(288px, calc(100vw - 32px));
     transform: translateX(-50%);
   }
 

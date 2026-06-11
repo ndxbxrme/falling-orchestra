@@ -205,12 +205,14 @@ export class MusicSystem {
     oscA: OscillatorNode;
     oscB: OscillatorNode;
     baseGain: number;
+    releaseEndTime: number;
   };
   private soloVoiceConfig: SoloVoiceConfig = {};
   private lastSoloMidi?: number;
   private soloStepDirection: 1 | -1 = 1;
+  private orderedGrooveLevels: number[] = [];
   private desiredGrooveLevel = 1;
-  private queuedTransitionLevel: number | null = null;
+  private queuedTransitionLevels: number[] = [];
   private transitionNoticeLevel: number | null = null;
   private transitionNoticeQueuedAt?: number;
   private transitionNoticeHandoffTime?: number;
@@ -261,15 +263,18 @@ export class MusicSystem {
         },
       ]),
     );
+    this.orderedGrooveLevels = [...new Set(song.grooveLevels.map((grooveLevel) => grooveLevel.level))].sort(
+      (a, b) => a - b,
+    );
 
-    const baseLevel = song.grooveLevels[0]?.level;
+    const baseLevel = this.orderedGrooveLevels[0];
     if (baseLevel === undefined) {
       throw new Error(`Song "${song.id}" is missing groove levels`);
     }
 
     this.currentGrooveLevel = baseLevel;
     this.desiredGrooveLevel = baseLevel;
-    this.queuedTransitionLevel = null;
+    this.queuedTransitionLevels = [];
     this.clearTransitionNotice();
     this.clearPendingGrooveLanding();
     this.landedGrooveLevel = null;
@@ -391,17 +396,29 @@ export class MusicSystem {
       return;
     }
 
-    this.desiredGrooveLevel = level;
+    const targetIndex = this.orderedGrooveLevels.indexOf(level);
+    if (targetIndex < 0) {
+      return;
+    }
 
-    if (level === this.currentGrooveLevel) {
-      this.queuedTransitionLevel = null;
-      this.clearTransitionNotice();
+    const highestCommittedLevel = this.getHighestCommittedGrooveLevel();
+    const highestCommittedIndex = this.orderedGrooveLevels.indexOf(highestCommittedLevel);
+    this.desiredGrooveLevel = Math.max(level, this.desiredGrooveLevel);
+
+    if (highestCommittedIndex < 0 || targetIndex <= highestCommittedIndex) {
+      this.syncQueuedTransitionNotice();
       this.syncRuntimeSnapshot();
       return;
     }
 
-    this.queuedTransitionLevel = level;
-    this.updateTransitionNotice(level);
+    for (let index = highestCommittedIndex + 1; index <= targetIndex; index += 1) {
+      const queuedLevel = this.orderedGrooveLevels[index];
+      if (queuedLevel !== undefined) {
+        this.queuedTransitionLevels.push(queuedLevel);
+      }
+    }
+
+    this.syncQueuedTransitionNotice();
     this.syncRuntimeSnapshot();
   }
 
@@ -415,7 +432,7 @@ export class MusicSystem {
     this.stopScheduledLoopSources();
     this.currentGrooveLevel = baseLevel;
     this.desiredGrooveLevel = baseLevel;
-    this.queuedTransitionLevel = null;
+    this.queuedTransitionLevels = [];
     this.clearTransitionNotice();
     this.clearPendingGrooveLanding();
     this.landedGrooveLevel = null;
@@ -560,21 +577,39 @@ export class MusicSystem {
     };
   }
 
-  stopSoloVoice(): void {
+  stopSoloVoice(graceful = false): void {
     if (!this.audioContext || !this.soloVoice) {
       return;
     }
 
     const now = this.audioContext.currentTime;
-    const { motionGain, articulationGain, oscA, oscB } = this.soloVoice;
+    const { motionGain, articulationGain, oscA, oscB, releaseEndTime } = this.soloVoice;
+
+    if (graceful) {
+      const stopTime = Math.max(releaseEndTime + 0.06, now + 0.06);
+      try {
+        oscA.stop(stopTime);
+        oscB.stop(stopTime);
+      } catch {
+        // no-op
+      }
+      this.lastSoloMidi = undefined;
+      this.soloStepDirection = 1;
+      return;
+    }
+
     motionGain.gain.cancelScheduledValues(now);
     articulationGain.gain.cancelScheduledValues(now);
     motionGain.gain.setValueAtTime(Math.max(motionGain.gain.value, 0.0001), now);
     articulationGain.gain.setValueAtTime(Math.max(articulationGain.gain.value, 0.0001), now);
     motionGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
     articulationGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
-    oscA.stop(now + 0.42);
-    oscB.stop(now + 0.42);
+    try {
+      oscA.stop(now + 0.42);
+      oscB.stop(now + 0.42);
+    } catch {
+      // no-op
+    }
     this.soloVoice = undefined;
     this.lastSoloMidi = undefined;
     this.soloStepDirection = 1;
@@ -614,6 +649,7 @@ export class MusicSystem {
       this.grooveLandingSequence += 1;
       this.clearPendingGrooveLanding();
       this.clearTransitionNotice();
+      this.syncQueuedTransitionNotice();
     }
     if (this.transitionNoticeHandoffTime !== undefined && now >= this.transitionNoticeHandoffTime) {
       this.clearTransitionNotice();
@@ -1072,7 +1108,7 @@ export class MusicSystem {
   }
 
   private getBaseGrooveLevel(): number {
-    return this.song?.grooveLevels[0]?.level ?? this.currentGrooveLevel;
+    return this.orderedGrooveLevels[0] ?? this.currentGrooveLevel;
   }
 
   private getInitialTransportStartTime(): number {
@@ -1151,16 +1187,16 @@ export class MusicSystem {
       when,
       currentGrooveLevel: this.currentGrooveLevel,
       desiredGrooveLevel: this.desiredGrooveLevel,
-      queuedTransitionLevel: this.queuedTransitionLevel,
+      queuedTransitionLevels: this.queuedTransitionLevels,
       nextGrooveBoundaryTime: this.nextGrooveBoundaryTime,
     });
 
     this.nextGrooveBoundaryTime = undefined;
 
-    const nextLevel = this.queuedTransitionLevel;
+    const nextLevel = this.queuedTransitionLevels[0] ?? null;
     if (nextLevel !== null && nextLevel !== this.currentGrooveLevel) {
       const grooveLevel = this.grooveLevels.get(nextLevel);
-      this.queuedTransitionLevel = null;
+      this.queuedTransitionLevels.shift();
       const intro = grooveLevel?.intro;
       const main = grooveLevel?.main;
 
@@ -1181,7 +1217,7 @@ export class MusicSystem {
                 this.songEndingScheduled = false;
                 this.endingStartedAt = undefined;
                 this.endingCompletesAt = undefined;
-                this.queuedTransitionLevel = null;
+                this.queuedTransitionLevels = [];
                 this.desiredGrooveLevel = nextLevel;
                 this.nextGrooveBoundaryTime = undefined;
               }
@@ -1190,14 +1226,12 @@ export class MusicSystem {
 
         if (main) {
           this.scheduleGrooveClip(nextLevel, "main", introEndTime);
-          this.currentGrooveLevel = nextLevel;
           this.desiredGrooveLevel = nextLevel;
           this.nextGrooveBoundaryTime = introEndTime + this.getClipDuration(main);
           return;
         }
 
         if (grooveLevel?.completesSong) {
-          this.currentGrooveLevel = nextLevel;
           this.desiredGrooveLevel = nextLevel;
           this.songEndingScheduled = true;
           return;
@@ -1216,6 +1250,7 @@ export class MusicSystem {
         this.clearTransitionNotice();
         this.setPendingGrooveLanding(nextLevel, when);
         this.scheduleGrooveClip(nextLevel, "main", when);
+        this.desiredGrooveLevel = nextLevel;
         this.nextGrooveBoundaryTime = when + this.getClipDuration(main);
         return;
       }
@@ -1228,6 +1263,32 @@ export class MusicSystem {
 
     this.scheduleGrooveClip(this.currentGrooveLevel, "main", when);
     this.nextGrooveBoundaryTime = when + this.getClipDuration(currentMain);
+  }
+
+  private getHighestCommittedGrooveLevel(): number {
+    if (this.queuedTransitionLevels.length > 0) {
+      return this.queuedTransitionLevels[this.queuedTransitionLevels.length - 1] ?? this.currentGrooveLevel;
+    }
+
+    if (this.pendingGrooveLandingLevel !== null) {
+      return this.pendingGrooveLandingLevel;
+    }
+
+    return this.currentGrooveLevel;
+  }
+
+  private syncQueuedTransitionNotice(): void {
+    if (this.pendingGrooveLandingLevel !== null) {
+      return;
+    }
+
+    const nextLevel = this.queuedTransitionLevels[0];
+    if (nextLevel === undefined) {
+      this.clearTransitionNotice();
+      return;
+    }
+
+    this.updateTransitionNotice(nextLevel);
   }
 
   private scheduleGrooveClip(
@@ -1677,6 +1738,11 @@ export class MusicSystem {
 
       oscA.start(when);
       oscB.start(when);
+      oscA.onended = () => {
+        if (this.soloVoice?.oscA === oscA) {
+          this.soloVoice = undefined;
+        }
+      };
 
       this.soloVoice = {
         motionGain,
@@ -1686,11 +1752,13 @@ export class MusicSystem {
         oscA,
         oscB,
         baseGain,
+        releaseEndTime,
       };
       return;
     }
 
     this.soloVoice.baseGain = baseGain;
+    this.soloVoice.releaseEndTime = releaseEndTime;
     this.soloVoice.oscA.frequency.setTargetAtTime(frequency, when, glideTime);
     this.soloVoice.oscB.frequency.setTargetAtTime(frequency * 1.002, when, glideTime);
     this.soloVoice.panner.pan.setTargetAtTime(pan, when, 0.08);

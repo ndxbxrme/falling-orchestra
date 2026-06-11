@@ -12,7 +12,7 @@ export const SONG4_CONFIG: SongConfig = {
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
-    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "pentatonicMajor" },
+    { startBar: 1, lengthBars: 8, rootNote: "F", mode: "bluesMajor" },
   ],
   impactPalette: {
     voices: {
@@ -153,6 +153,7 @@ export const SONG4_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("04i.ogg"),
         bars: 4,
+        grooveChangeAfterBars: 0,
       },
     },
     {
@@ -164,6 +165,7 @@ export const SONG4_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("05i.ogg"),
         bars: 10,
+        grooveChangeAfterBars: 8,
       },
     },
     {
