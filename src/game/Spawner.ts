@@ -40,8 +40,20 @@ interface SpecialBurst {
 }
 
 export class Spawner {
-  spawnInterval: number = GAME_CONFIG.spawnIntervalDefault;
-  currentInterval: number = GAME_CONFIG.spawnIntervalDefault;
+  private readonly spawnIntervalScale =
+    typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches
+      ? GAME_CONFIG.spawnIntervalCoarseScale
+      : 1;
+  spawnInterval: number = clamp(
+    GAME_CONFIG.spawnIntervalDefault * this.spawnIntervalScale,
+    GAME_CONFIG.spawnIntervalMin,
+    GAME_CONFIG.spawnIntervalMax,
+  );
+  currentInterval: number = clamp(
+    GAME_CONFIG.spawnIntervalDefault * this.spawnIntervalScale,
+    GAME_CONFIG.spawnIntervalMin,
+    GAME_CONFIG.spawnIntervalMax,
+  );
   spawnPattern: SpawnPattern = "rain";
   spawnCenter = 0.5;
   frozen = false;
@@ -144,7 +156,7 @@ export class Spawner {
 
   setSpawnProfile(profile?: SpawnProfileConfig): void {
     this.spawnInterval = clamp(
-      profile?.spawnInterval ?? GAME_CONFIG.spawnIntervalDefault,
+      (profile?.spawnInterval ?? GAME_CONFIG.spawnIntervalDefault) * this.spawnIntervalScale,
       GAME_CONFIG.spawnIntervalMin,
       GAME_CONFIG.spawnIntervalMax,
     );
