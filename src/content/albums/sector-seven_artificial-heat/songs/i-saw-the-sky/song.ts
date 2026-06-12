@@ -16,5 +16,8 @@ export const I_SAW_THE_SKY_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'cobalt'
+  },
   loadConfig: async () => (await import("./config")).SONG3_CONFIG,
 };

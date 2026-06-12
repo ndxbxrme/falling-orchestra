@@ -15,7 +15,7 @@ export const SECTOR_SEVEN_ARTIFICIAL_HEAT_ALBUM: AlbumManifest = {
     text: "#eaf7ff",
     background: "#081522",
     panel: "#101b29",
-    backdropPreset: "radar-shrine",
+    backdropPreset: "afterburner-slipstream",
   },
   tags: [
     "deep house",

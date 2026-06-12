@@ -16,5 +16,8 @@ export const WITH_NO_SOUND_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'ember'
+  },
   loadConfig: async () => (await import("./config")).SONG10_CONFIG,
 };

@@ -4,6 +4,75 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { BackdropModule } from "../schema";
 
+/**
+ * Variants:
+ * - `surgical-cyan`
+ * - `aurora`
+ * - `warning-amber`
+ * - `ghost-orchid`
+ *
+ * Overrides:
+ * - `backdropParams.variant`
+ * - `backdropParams.brightnessScale`
+ * - `backdropParams.scanSpeedScale`
+ *
+ * Notes:
+ * - The numeric overrides are intended as small trims on top of a named variant.
+ */
+type RadarShrineVariant = {
+  cyan: string;
+  dimCyan: string;
+  ice: string;
+  deep: string;
+  panel: string;
+  warning: string;
+  brightnessScale: number;
+  scanSpeedScale: number;
+};
+
+const RADAR_SHRINE_VARIANTS: Record<string, RadarShrineVariant> = {
+  "surgical-cyan": {
+    cyan: "#8cecff",
+    dimCyan: "#4ab8cc",
+    ice: "#d8fbff",
+    deep: "#061116",
+    panel: "#78dfff",
+    warning: "#bfffff",
+    brightnessScale: 1,
+    scanSpeedScale: 1,
+  },
+  aurora: {
+    cyan: "#7affda",
+    dimCyan: "#3dbd9d",
+    ice: "#e5fff8",
+    deep: "#051612",
+    panel: "#67ffd0",
+    warning: "#b8fff0",
+    brightnessScale: 1.02,
+    scanSpeedScale: 1.05,
+  },
+  "warning-amber": {
+    cyan: "#ffd67a",
+    dimCyan: "#c79642",
+    ice: "#fff1d7",
+    deep: "#160e06",
+    panel: "#ffcb73",
+    warning: "#fff0bf",
+    brightnessScale: 1.04,
+    scanSpeedScale: 0.96,
+  },
+  "ghost-orchid": {
+    cyan: "#d4a2ff",
+    dimCyan: "#8b63cc",
+    ice: "#f4e0ff",
+    deep: "#110816",
+    panel: "#cb91ff",
+    warning: "#f2d2ff",
+    brightnessScale: 0.98,
+    scanSpeedScale: 1.08,
+  },
+};
+
 export const RADAR_SHRINE_BACKDROP: BackdropModule = {
 id: "radar-shrine",
 label: "Radar Shrine",
@@ -15,6 +84,19 @@ const scene = context.scene;
 const bounds = context.getBounds();
 const meshes: Mesh[] = [];
 const materials: StandardMaterial[] = [];
+const variantName =
+  typeof context.params.variant === "string" && context.params.variant in RADAR_SHRINE_VARIANTS
+    ? context.params.variant
+    : "surgical-cyan";
+const variant = RADAR_SHRINE_VARIANTS[variantName];
+const brightnessScale =
+  typeof context.params.brightnessScale === "number"
+    ? context.params.brightnessScale
+    : variant.brightnessScale;
+const scanSpeedScale =
+  typeof context.params.scanSpeedScale === "number"
+    ? context.params.scanSpeedScale
+    : variant.scanSpeedScale;
 
 const makeMaterial = (
   name: string,
@@ -36,12 +118,12 @@ const makeMaterial = (
   return material;
 };
 
-const cyan = makeMaterial("radar-shrine-cyan", "#8cecff", 0.48, 0.72);
-const dimCyan = makeMaterial("radar-shrine-dim-cyan", "#4ab8cc", 0.26, 0.34);
-const ice = makeMaterial("radar-shrine-ice", "#d8fbff", 0.54, 0.52);
-const deep = makeMaterial("radar-shrine-deep", "#061116", 0.08, 0.76);
-const panelMat = makeMaterial("radar-shrine-panel", "#78dfff", 0.4, 0.2);
-const warning = makeMaterial("radar-shrine-landing", "#bfffff", 0.65, 0.62);
+const cyan = makeMaterial("radar-shrine-cyan", variant.cyan, 0.48, 0.72);
+const dimCyan = makeMaterial("radar-shrine-dim-cyan", variant.dimCyan, 0.26, 0.34);
+const ice = makeMaterial("radar-shrine-ice", variant.ice, 0.54, 0.52);
+const deep = makeMaterial("radar-shrine-deep", variant.deep, 0.08, 0.76);
+const panelMat = makeMaterial("radar-shrine-panel", variant.panel, 0.4, 0.2);
+const warning = makeMaterial("radar-shrine-landing", variant.warning, 0.65, 0.62);
 
 const width = Math.max(18, bounds.right - bounds.left);
 const height = Math.max(12, bounds.top - bounds.bottom);
@@ -164,7 +246,7 @@ return {
         : 0;
     const ending = Math.max(0, Math.min(1, inputs.endingProgress));
 
-    const glow = 0.24 + groove * 0.28 + beat * 0.28 + landing * 0.38;
+    const glow = (0.24 + groove * 0.28 + beat * 0.28 + landing * 0.38) * brightnessScale;
     cyan.emissiveColor.set(0.55 * glow, 0.93 * glow, glow);
     dimCyan.emissiveColor.set(0.2 * glow, 0.55 * glow, 0.64 * glow);
     ice.emissiveColor.set(0.78 * glow, 0.98 * glow, glow);
@@ -172,7 +254,7 @@ return {
 
     for (let i = 0; i < rings.length; i += 1) {
       const direction = i % 2 === 0 ? 1 : -1;
-      rings[i].rotation.z = time * (0.08 + i * 0.018) * direction;
+      rings[i].rotation.z = time * (0.08 + i * 0.018) * direction * scanSpeedScale;
       const pulseScale = 1 + beat * (0.018 + i * 0.006) + landing * 0.045;
       rings[i].scaling.x = baseScale * pulseScale;
       rings[i].scaling.y = baseScale * pulseScale;
@@ -186,17 +268,18 @@ return {
     for (let i = 0; i < arms.length; i += 1) {
       const direction = i % 2 === 0 ? 1 : -1;
       arms[i].rotation.z =
-        (Math.PI * i) / 4 + time * direction * (0.28 + groove * 0.38);
+        (Math.PI * i) / 4 + time * direction * (0.28 + groove * 0.38) * scanSpeedScale;
       arms[i].visibility = 0.55 + beat * 0.35 + landing * 0.1 - ending * 0.36;
     }
 
     for (let i = 0; i < ticks.length; i += 1) {
       ticks[i].visibility =
-        0.24 + ((i + Math.floor(time * 10)) % 4 === 0 ? beat * 0.68 : groove * 0.22);
+        0.24 +
+        ((i + Math.floor(time * 10 * scanSpeedScale)) % 4 === 0 ? beat * 0.68 : groove * 0.22);
     }
 
     for (let i = 0; i < panels.length; i += 1) {
-      const sweep = Math.sin(time * (0.9 + groove * 0.7) + i * 0.85);
+      const sweep = Math.sin(time * (0.9 + groove * 0.7) * scanSpeedScale + i * 0.85);
       panels[i].scaling.y = baseScale * (0.88 + sweep * 0.045 + beat * 0.08);
       panels[i].visibility =
         0.23 + Math.max(0, sweep) * 0.22 + beat * 0.16 + landing * 0.18 - ending * 0.28;

@@ -12,5 +12,8 @@ export const PABLO_SONG: SongManifest = {
   moodTags: ["dark", "broken", "heavy"],
   recommendedWeight: 0.82,
   availability: "included",
+  backdropParams: {
+    variant: 'warehouse-neon'
+  },
   loadConfig: async () => (await import("./config")).SONG6_CONFIG,
 };

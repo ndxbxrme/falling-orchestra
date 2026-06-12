@@ -16,5 +16,9 @@ export const HALF_PAINTED_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropPreset: 'radar-shrine',
+  backdropParams: {
+    variant: 'warning-amber',
+  },
   loadConfig: async () => (await import("./config")).SONG14_CONFIG,
 };

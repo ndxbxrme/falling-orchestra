@@ -16,5 +16,8 @@ export const ROLLING_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'toxic-teal',
+  },
   loadConfig: async () => (await import("./config")).SONG10_CONFIG,
 };

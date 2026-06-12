@@ -16,5 +16,9 @@ export const ESCAPE_PT_1_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropPreset: 'radar-shrine',
+  backdropParams: {
+    variant: 'surgical-cyan',
+  },
   loadConfig: async () => (await import("./config")).SONG12_CONFIG,
 };

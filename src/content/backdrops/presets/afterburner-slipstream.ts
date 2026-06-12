@@ -3,6 +3,22 @@ import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { BackdropModule } from "../schema";
 
+/**
+ * Variants:
+ * - `cobalt`
+ * - `magenta`
+ * - `teal`
+ * - `ember`
+ *
+ * Overrides:
+ * - `backdropParams.variant`
+ * - `backdropParams.baseBrightness`
+ * - `backdropParams.speedScale`
+ * - `backdropParams.streakDensity`
+ *
+ * Notes:
+ * - The numeric overrides are intended as small trims on top of a named variant, not a full palette system.
+ */
 type SlipstreamVariantPalette = {
   lowSky: [number, number, number];
   highSky: [number, number, number];

@@ -12,5 +12,8 @@ export const CONSTANT_ENOPLE_SONG: SongManifest = {
   moodTags: ["heavy", "driving"],
   recommendedWeight: 0.76,
   availability: "included",
+  backdropParams: {
+    variant: 'signal-amber'
+  },
   loadConfig: async () => (await import("./config")).SONG5_CONFIG,
 };

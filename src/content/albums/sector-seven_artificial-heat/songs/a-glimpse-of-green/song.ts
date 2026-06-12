@@ -16,5 +16,8 @@ export const A_GLIMPSE_OF_GREEN_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'cobalt'
+  },
   loadConfig: async () => (await import("./config")).SONG7_CONFIG,
 };

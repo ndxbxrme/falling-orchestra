@@ -16,5 +16,8 @@ export const DANGER_DRIVE_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'overload',
+  },
   loadConfig: async () => (await import("./config")).SONG11_CONFIG,
 };

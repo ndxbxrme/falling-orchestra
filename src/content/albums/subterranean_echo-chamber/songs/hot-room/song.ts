@@ -16,5 +16,9 @@ export const HOT_ROOM_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropPreset: 'radar-shrine',
+  backdropParams: {
+    variant: 'ghost-orchid',
+  },
   loadConfig: async () => (await import("./config")).SONG4_CONFIG,
 };

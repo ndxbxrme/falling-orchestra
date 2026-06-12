@@ -7,9 +7,9 @@ const assetUrl = (relativePath: string): string =>
 export const SONG13_CONFIG: SongConfig = {
   id: "song13",
   transport: {
-    bpm: 148.7,
+    bpm: 85,
     beatsPerBar: 4,
-    barsPerLoop: 7,
+    barsPerLoop: 4,
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
@@ -20,67 +20,62 @@ export const SONG13_CONFIG: SongConfig = {
       level: 1,
       main: {
         src: assetUrl("01m.ogg"),
-        bars: 7,
+        bars: 4,
       },
       intro: {
         src: assetUrl("01i.ogg"),
-        bars: 7,
-        grooveChangeAfterBars: 5,
+        bars: 4,
       },
     },
     {
       level: 2,
       main: {
         src: assetUrl("02m.ogg"),
-        bars: 7,
+        bars: 4,
       },
       intro: {
         src: assetUrl("02i.ogg"),
-        bars: 7,
-        grooveChangeAfterBars: 5,
+        bars: 4,
       },
     },
     {
       level: 3,
       main: {
         src: assetUrl("03m.ogg"),
-        bars: 7,
+        bars: 4,
       },
       intro: {
         src: assetUrl("03i.ogg"),
-        bars: 14,
-        grooveChangeAfterBars: 12,
+        bars: 8,
       },
     },
     {
       level: 4,
       main: {
         src: assetUrl("04m.ogg"),
-        bars: 7,
+        bars: 4,
       },
       intro: {
         src: assetUrl("04i.ogg"),
-        bars: 7,
-        grooveChangeAfterBars: 5,
+        bars: 4,
       },
     },
     {
       level: 5,
       main: {
         src: assetUrl("05m.ogg"),
-        bars: 7,
+        bars: 4,
       },
       intro: {
         src: assetUrl("05i.ogg"),
-        bars: 14,
-        grooveChangeAfterBars: 12,
+        bars: 8,
       },
     },
     {
       level: 6,
       intro: {
         src: assetUrl("06i.ogg"),
-        bars: 9,
+        bars: 5,
       },
       completesSong: true,
     },

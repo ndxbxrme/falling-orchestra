@@ -16,5 +16,8 @@ export const TUMBLING_DOWN_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'cobalt'
+  },
   loadConfig: async () => (await import("./config")).SONG6_CONFIG,
 };

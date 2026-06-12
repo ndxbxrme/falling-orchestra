@@ -16,5 +16,8 @@ export const TRIANGLES_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'magenta'
+  },
   loadConfig: async () => (await import("./config")).SONG8_CONFIG,
 };

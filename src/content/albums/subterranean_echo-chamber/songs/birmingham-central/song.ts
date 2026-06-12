@@ -16,5 +16,8 @@ export const BIRMINGHAM_CENTRAL_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'cryo-core',
+  },
   loadConfig: async () => (await import("./config")).SONG1_CONFIG,
 };

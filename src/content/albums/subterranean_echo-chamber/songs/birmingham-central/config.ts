@@ -59,7 +59,7 @@ export const SONG1_CONFIG: SongConfig = {
       intro: {
         src: assetUrl("04i.ogg"),
         bars: 5,
-        grooveChangeAfterBars: 3,
+        grooveChangeAfterBars: 4,
       },
     },
     {

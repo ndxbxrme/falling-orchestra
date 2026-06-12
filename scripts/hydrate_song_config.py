@@ -185,16 +185,18 @@ def infer_timing(
     preferred_main_bars: list[int],
     preferred_bpm: float,
 ) -> InferenceResult:
-    best_score: tuple[float, int, int, int, float] | None = None
+    best_score: tuple[float, int, int, float, float, float] | None = None
     best_bpm = bpm_min
     best_bars: list[int] = []
 
     steps = int(round((bpm_max - bpm_min) / bpm_step))
-    primary_preferred_main_bars = preferred_main_bars[0] if preferred_main_bars else 4
+    sorted_preferred_main_bars = preferred_main_bars or [4]
+    primary_preferred_main_bars = sorted_preferred_main_bars[0]
     for step_index in range(steps + 1):
         bpm = bpm_min + (step_index * bpm_step)
         rounded_bars: list[int] = []
         total_error = 0.0
+        main_total_error = 0.0
         odd_count = 0
         main_bars: list[int] = []
 
@@ -202,8 +204,11 @@ def infer_timing(
             raw_bars = clip.duration_seconds * bpm / (60.0 * beats_per_bar)
             rounded = max(1, min(max_bars, int(round(raw_bars))))
             rounded_bars.append(rounded)
-            total_error += abs(raw_bars - rounded) / rounded
-            if rounded % 2 == 1 and rounded > 1:
+            clip_error = abs(raw_bars - rounded) / rounded
+            total_error += clip_error
+            if clip.kind == "main":
+                main_total_error += clip_error
+            if clip.kind == "main" and rounded % 2 == 1 and rounded > 1:
                 odd_count += 1
             if clip.kind == "main":
                 main_bars.append(rounded)
@@ -211,11 +216,14 @@ def infer_timing(
         main_common = mode_int(main_bars, 4)
         unique_main = len(set(main_bars)) if main_bars else 0
         preferred_distance = abs(main_common - primary_preferred_main_bars)
+        preferred_match_rank = 0 if main_common in sorted_preferred_main_bars else 1
         score = (
-            round(total_error, 6),
+            preferred_distance,
+            preferred_match_rank,
             odd_count,
             unique_main,
-            preferred_distance,
+            round(main_total_error, 6),
+            round(total_error, 6),
             abs(bpm - preferred_bpm),
         )
         if best_score is None or score < best_score:
@@ -464,12 +472,8 @@ def main() -> None:
             print()
         clips = collect_clips(context.audio_dir)
         existing_text = context.config_file.read_text(encoding="utf-8")
-        existing_bars_per_loop = extract_number_field(existing_text, "barsPerLoop") or 4
         existing_bpm = extract_float_field(existing_text, "bpm") or 120.0
-        preferred_main_bars = [existing_bars_per_loop]
-        preferred_main_bars.extend(
-            value for value in parse_preferred_main_bars(args.preferred_main_bars) if value != existing_bars_per_loop
-        )
+        preferred_main_bars = parse_preferred_main_bars(args.preferred_main_bars)
         inference = infer_timing(
             clips,
             beats_per_bar=args.beats_per_bar,

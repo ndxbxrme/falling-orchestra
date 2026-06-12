@@ -5,6 +5,20 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { BackdropModule } from "../schema";
 import backgroundUrl from "../assets/rain-window/background.webp";
 
+/**
+ * Variants:
+ * - `moody`
+ * - `storm`
+ * - `sodium`
+ * - `frost`
+ *
+ * Overrides:
+ * - `backdropParams.variant`
+ * - `backdropParams.backgroundUrl`
+ *
+ * Notes:
+ * - `backgroundUrl` should point to the image rendered behind the rain/distortion shader.
+ */
 const RAIN_WINDOW_VARIANTS: Record<
   string,
   {

@@ -12,5 +12,8 @@ export const FATMAN_SONG: SongManifest = {
   moodTags: ["dark", "hypnotic", "heavy"],
   recommendedWeight: 0.98,
   availability: "included",
+  backdropParams: {
+    variant: 'cold-steel'
+  },
   loadConfig: async () => (await import("./config")).SONG2_CONFIG,
 };

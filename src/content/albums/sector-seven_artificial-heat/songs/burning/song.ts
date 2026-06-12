@@ -16,5 +16,8 @@ export const BURNING_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'ember'
+  },
   loadConfig: async () => (await import("./config")).SONG9_CONFIG,
 };

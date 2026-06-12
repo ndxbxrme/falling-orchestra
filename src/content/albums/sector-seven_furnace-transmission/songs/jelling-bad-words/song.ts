@@ -12,5 +12,8 @@ export const JELLING_BAD_WORDS_SONG: SongManifest = {
   moodTags: ["hypnotic", "melodic"],
   recommendedWeight: 0.72,
   availability: "included",
+  backdropParams: {
+    variant: 'red-room'
+  },
   loadConfig: async () => (await import("./config")).SONG7_CONFIG,
 };

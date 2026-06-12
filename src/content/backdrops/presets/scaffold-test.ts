@@ -3,6 +3,16 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { BackdropModule } from "../schema";
 
+/**
+ * Variants:
+ * - none
+ *
+ * Overrides:
+ * - none currently
+ *
+ * Notes:
+ * - Generated scaffold example. Keep this comment format when turning a scaffold into a real preset.
+ */
 export const SCAFFOLD_TEST_BACKDROP: BackdropModule = {
   id: "scaffold-test",
   label: "Scaffold Test",

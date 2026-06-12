@@ -16,5 +16,8 @@ export const ROSEBLOOM_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'ultraviolet',
+  },
   loadConfig: async () => (await import("./config")).SONG15_CONFIG,
 };

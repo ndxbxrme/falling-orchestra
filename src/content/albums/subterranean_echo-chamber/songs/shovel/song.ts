@@ -16,5 +16,9 @@ export const SHOVEL_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropPreset: 'radar-shrine',
+  backdropParams: {
+    variant: 'aurora',
+  },
   loadConfig: async () => (await import("./config")).SONG2_CONFIG,
 };

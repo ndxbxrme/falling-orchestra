@@ -12,5 +12,8 @@ export const SUNUP_SONG: SongManifest = {
   moodTags: ["dark", "broken"],
   recommendedWeight: 0.74,
   availability: "included",
+  backdropParams: {
+    variant: 'signal-amber'
+  },
   loadConfig: async () => (await import("./config")).SONG3_CONFIG,
 };

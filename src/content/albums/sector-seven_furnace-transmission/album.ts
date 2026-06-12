@@ -16,12 +16,7 @@ export const SECTOR_SEVEN_FURNACE_TRANSMISSION_ALBUM: AlbumManifest = {
     text: "#eaf7ff",
     background: "#081522",
     panel: "#101b29",
-    backdropPreset: "afterburner-slipstream",
-    backdropParams: {
-      haze: 0.7,
-      laserColorA: "#57ffe0",
-      laserColorB: "#7de86f",
-    },
+    backdropPreset: "brutalist-club",
   },
   tags: ["dark", "techno", "sheffield", "interactive"],
   songIds: [

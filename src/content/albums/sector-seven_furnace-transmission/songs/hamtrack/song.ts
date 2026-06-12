@@ -12,5 +12,8 @@ export const HAMTRACK_SONG: SongManifest = {
   moodTags: ["heavy", "dark", "driving"],
   recommendedWeight: 0.8,
   availability: "included",
+  backdropParams: {
+    variant: 'cold-steel'
+  },
   loadConfig: async () => (await import("./config")).SONG8_CONFIG,
 };

@@ -16,5 +16,8 @@ export const DISTORTED_BY_FEAR_SONG: SongManifest = {
 ],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'teal'
+  },
   loadConfig: async () => (await import("./config")).SONG4_CONFIG,
 };

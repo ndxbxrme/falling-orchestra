@@ -3,6 +3,22 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { BackdropModule } from "../schema";
 
+/**
+ * Backdrop preset contract:
+ * - `theme.backdropPreset` or `song.backdropPreset` selects this module by `id`.
+ * - `theme.backdropParams` and `song.backdropParams` are shallow-merged and exposed as `context.params`.
+ *
+ * Standard comment format for real presets:
+ * - `Variants:` named looks accepted via `backdropParams.variant`
+ * - `Overrides:` additional supported `backdropParams.*` keys
+ * - `Notes:` optional authoring/runtime caveats
+ *
+ * Lifecycle rules:
+ * - Create all meshes/materials/textures inside `create()`.
+ * - Update only your own objects inside `update()`.
+ * - Dispose everything in `dispose()`.
+ * - If you cache width/height/scale/anchor values from `bounds`, recompute and store them in `resize()`.
+ */
 export const BACKDROP_TEMPLATE: BackdropModule = {
   id: "template-name",
   label: "Template Name",

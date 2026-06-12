@@ -12,5 +12,8 @@ export const GIANT_RESET_SONG: SongManifest = {
   moodTags: ["dark", "driving"],
   recommendedWeight: 0.66,
   availability: "included",
+  backdropParams: {
+    variant: 'signal-amber'
+  },
   loadConfig: async () => (await import("./config")).SONG1_CONFIG,
 };

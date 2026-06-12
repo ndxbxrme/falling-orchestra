@@ -4,6 +4,75 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { BackdropModule } from "../schema";
 
+/**
+ * Variants:
+ * - `cryo-core`
+ * - `ultraviolet`
+ * - `toxic-teal`
+ * - `overload`
+ *
+ * Overrides:
+ * - `backdropParams.variant`
+ * - `backdropParams.brightnessScale`
+ * - `backdropParams.ringSpeedScale`
+ *
+ * Notes:
+ * - The numeric overrides are intended as small trims on top of a named variant.
+ */
+type GatecrasherVariant = {
+  steel: string;
+  deepBlue: string;
+  reactorBlue: string;
+  iceWhite: string;
+  acid: string;
+  shadowCyan: string;
+  brightnessScale: number;
+  ringSpeedScale: number;
+};
+
+const GATECRASHER_VARIANTS: Record<string, GatecrasherVariant> = {
+  "cryo-core": {
+    steel: "#102029",
+    deepBlue: "#07131d",
+    reactorBlue: "#76e8ff",
+    iceWhite: "#d8fbff",
+    acid: "#b7ffef",
+    shadowCyan: "#2a8597",
+    brightnessScale: 1,
+    ringSpeedScale: 1,
+  },
+  ultraviolet: {
+    steel: "#1a1228",
+    deepBlue: "#0a0818",
+    reactorBlue: "#bf86ff",
+    iceWhite: "#f3dcff",
+    acid: "#f38cff",
+    shadowCyan: "#6d4ac7",
+    brightnessScale: 0.98,
+    ringSpeedScale: 1.08,
+  },
+  "toxic-teal": {
+    steel: "#0f231f",
+    deepBlue: "#061714",
+    reactorBlue: "#66ffd7",
+    iceWhite: "#d8fff6",
+    acid: "#b8ff8b",
+    shadowCyan: "#199c80",
+    brightnessScale: 1.02,
+    ringSpeedScale: 1.04,
+  },
+  overload: {
+    steel: "#26140f",
+    deepBlue: "#1b0907",
+    reactorBlue: "#ff996b",
+    iceWhite: "#ffe4d8",
+    acid: "#ffd36b",
+    shadowCyan: "#b64f37",
+    brightnessScale: 1.08,
+    ringSpeedScale: 1.14,
+  },
+};
+
 export const GATECRASHER_REACTOR_BACKDROP: BackdropModule = {
 id: "gatecrasher-reactor",
 label: "Gatecrasher Reactor",
@@ -15,6 +84,19 @@ const scene = context.scene;
 const bounds = context.getBounds();
 const meshes: Mesh[] = [];
 const materials: StandardMaterial[] = [];
+const variantName =
+  typeof context.params.variant === "string" && context.params.variant in GATECRASHER_VARIANTS
+    ? context.params.variant
+    : "cryo-core";
+const variant = GATECRASHER_VARIANTS[variantName];
+const brightnessScale =
+  typeof context.params.brightnessScale === "number"
+    ? context.params.brightnessScale
+    : variant.brightnessScale;
+const ringSpeedScale =
+  typeof context.params.ringSpeedScale === "number"
+    ? context.params.ringSpeedScale
+    : variant.ringSpeedScale;
 
 const makeMaterial = (
   name: string,
@@ -36,12 +118,12 @@ const makeMaterial = (
   return material;
 };
 
-const steel = makeMaterial("gatecrasher-reactor-steel", "#102029", 0.1, 0.86);
-const deepBlue = makeMaterial("gatecrasher-reactor-deep-blue", "#07131d", 0.08, 0.9);
-const reactorBlue = makeMaterial("gatecrasher-reactor-blue", "#76e8ff", 0.44, 0.68);
-const iceWhite = makeMaterial("gatecrasher-reactor-ice-white", "#d8fbff", 0.52, 0.56);
-const acid = makeMaterial("gatecrasher-reactor-acid", "#b7ffef", 0.45, 0.42);
-const shadowCyan = makeMaterial("gatecrasher-reactor-shadow-cyan", "#2a8597", 0.24, 0.34);
+const steel = makeMaterial("gatecrasher-reactor-steel", variant.steel, 0.1, 0.86);
+const deepBlue = makeMaterial("gatecrasher-reactor-deep-blue", variant.deepBlue, 0.08, 0.9);
+const reactorBlue = makeMaterial("gatecrasher-reactor-blue", variant.reactorBlue, 0.44, 0.68);
+const iceWhite = makeMaterial("gatecrasher-reactor-ice-white", variant.iceWhite, 0.52, 0.56);
+const acid = makeMaterial("gatecrasher-reactor-acid", variant.acid, 0.45, 0.42);
+const shadowCyan = makeMaterial("gatecrasher-reactor-shadow-cyan", variant.shadowCyan, 0.24, 0.34);
 
 let width = Math.max(18, bounds.right - bounds.left);
 let height = Math.max(12, bounds.top - bounds.bottom);
@@ -200,7 +282,9 @@ return {
         : 0;
 
     const ignition = Math.max(groove, ending);
-    const glow = 0.22 + groove * 0.3 + beat * 0.28 + landing * 0.34 + ending * 0.48;
+    const glow =
+      (0.22 + groove * 0.3 + beat * 0.28 + landing * 0.34 + ending * 0.48) *
+      brightnessScale;
 
     reactorBlue.emissiveColor.set(0.32 * glow, 0.78 * glow, glow);
     shadowCyan.emissiveColor.set(0.12 * glow, 0.42 * glow, 0.5 * glow);
@@ -213,7 +297,8 @@ return {
     for (let i = 0; i < rings.length; i += 1) {
       const direction = i % 2 === 0 ? 1 : -1;
       const pulse = 1 + beat * (0.018 + i * 0.008) + landing * 0.045 + ending * 0.035;
-      rings[i].rotation.z = time * direction * (0.08 + i * 0.025 + groove * 0.075);
+      rings[i].rotation.z =
+        time * direction * (0.08 + i * 0.025 + groove * 0.075) * ringSpeedScale;
       rings[i].scaling.x = baseScale * pulse;
       rings[i].scaling.y = baseScale * pulse;
       rings[i].visibility = 0.64 + groove * 0.18 + beat * 0.12 - ending * i * 0.025;
@@ -232,7 +317,8 @@ return {
     for (let i = 0; i < containmentArms.length; i += 1) {
       const direction = i % 2 === 0 ? 1 : -1;
       containmentArms[i].rotation.z =
-        (Math.PI * i) / 6 + direction * time * (0.05 + groove * 0.18 + ending * 0.28);
+        (Math.PI * i) / 6 +
+        direction * time * (0.05 + groove * 0.18 + ending * 0.28) * ringSpeedScale;
       containmentArms[i].visibility =
         0.42 + groove * 0.2 + beat * 0.2 + landing * 0.16 + ending * 0.12;
       containmentArms[i].scaling.x = baseScale * (0.82 + groove * 0.16 + beat * 0.05);

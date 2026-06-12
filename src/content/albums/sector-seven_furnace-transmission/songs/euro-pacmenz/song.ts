@@ -12,5 +12,8 @@ export const EURO_PACMENZ_SONG: SongManifest = {
   moodTags: ["driving", "melodic"],
   recommendedWeight: 0.7,
   availability: "included",
+  backdropParams: {
+    variant: 'warehouse-neon'
+  },
   loadConfig: async () => (await import("./config")).SONG4_CONFIG,
 };

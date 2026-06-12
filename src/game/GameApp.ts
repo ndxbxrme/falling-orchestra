@@ -27,7 +27,6 @@ const GROOVE_TARGET = 9;
 const MEGA_COMBO_THRESHOLD = 6.4;
 const MEGA_COMBO_COOLDOWN = 1.1;
 const MEGA_COMBO_REWARD = 2;
-const LAUNCH_COUNTDOWN_STEP_MS = 620;
 const LAUNCH_COUNTDOWN_STEPS = 4;
 const GROOVE_LANDING_AFTERGLOW_MS = 520;
 const FIXED_SIMULATION_STEP = 1 / 60;
@@ -458,10 +457,20 @@ export class GameApp {
   }
 
   async beginFromSelection(): Promise<void> {
+    const countdownStepMs = this.getLaunchCountdownStepMs();
     this.setSessionPhase("countdown");
-    this.launchCountdownEndsAt = performance.now() + LAUNCH_COUNTDOWN_STEP_MS * LAUNCH_COUNTDOWN_STEPS;
+    this.launchCountdownEndsAt = performance.now() + countdownStepMs * LAUNCH_COUNTDOWN_STEPS;
     await this.music.unlock();
-    this.overlay.playLaunchCountdown();
+    this.overlay.playLaunchCountdown(countdownStepMs);
+  }
+
+  private getLaunchCountdownStepMs(): number {
+    const bpm = this.songConfig.transport.bpm;
+    if (!Number.isFinite(bpm) || bpm <= 0) {
+      return 600;
+    }
+
+    return (60 / bpm) * 1000;
   }
 
   private tick(deltaTime: number): void {

@@ -7,9 +7,9 @@ const assetUrl = (relativePath: string): string =>
 export const SONG11_CONFIG: SongConfig = {
   id: "song11",
   transport: {
-    bpm: 91.5,
+    bpm: 61,
     beatsPerBar: 4,
-    barsPerLoop: 6,
+    barsPerLoop: 4,
     harmonyCycleBars: 8,
   },
   harmonyTimeline: [
@@ -20,114 +20,108 @@ export const SONG11_CONFIG: SongConfig = {
       level: 1,
       main: {
         src: assetUrl("01m.ogg"),
-        bars: 3,
+        bars: 2,
       },
       intro: {
         src: assetUrl("01i.ogg"),
-        bars: 3,
+        bars: 2,
       },
     },
     {
       level: 2,
       main: {
         src: assetUrl("02m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("02i.ogg"),
-        bars: 3,
-        grooveChangeAfterBars: 1,
+        bars: 2,
       },
     },
     {
       level: 3,
       main: {
         src: assetUrl("03m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("03i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
+        grooveChangeAfterBars: 0,
       },
     },
     {
       level: 4,
       main: {
         src: assetUrl("04m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("04i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
+        grooveChangeAfterBars: 0,
       },
     },
     {
       level: 5,
-      main: {
-        src: assetUrl("06m.ogg"),
-        bars: 6,
-      },
       intro: {
         src: assetUrl("05i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
+      },
+      main: {
+        src: assetUrl("06m.ogg"),
+        bars: 4,
       },
     },
     {
       level: 6,
       main: {
         src: assetUrl("07m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("07i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
       },
     },
     {
       level: 7,
       main: {
         src: assetUrl("08m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("08i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
       },
     },
     {
       level: 8,
       main: {
         src: assetUrl("09m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("09i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
       },
     },
     {
       level: 9,
       main: {
         src: assetUrl("10m.ogg"),
-        bars: 6,
+        bars: 4,
       },
       intro: {
         src: assetUrl("10i.ogg"),
-        bars: 6,
-        grooveChangeAfterBars: 4,
+        bars: 4,
       },
     },
     {
       level: 10,
       intro: {
         src: assetUrl("11i.ogg"),
-        bars: 7,
+        bars: 5,
       },
       completesSong: true,
     },

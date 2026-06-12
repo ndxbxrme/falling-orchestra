@@ -5,6 +5,27 @@ import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { BackdropModule } from "../schema";
 import panoramaUrl from "../assets/skybox-360/panorama.webp";
 
+/**
+ * Variants:
+ * - `night`
+ * - `neutral`
+ * - `warm`
+ * - `dream`
+ *
+ * Overrides:
+ * - `backdropParams.variant`
+ * - `backdropParams.panoramaUrl`
+ * - `backdropParams.yawCenterDegrees`
+ * - `backdropParams.zoom`
+ * - `backdropParams.horizontalFovScale`
+ * - `backdropParams.verticalFovScale`
+ *
+ * Notes:
+ * - `panoramaUrl` should point to an equirectangular panorama.
+ * - `yawCenterDegrees` picks the hero viewing direction and helps keep the seam out of view.
+ * - `zoom` > 1 zooms in, `zoom` < 1 widens out.
+ * - `horizontalFovScale` / `verticalFovScale` help tame panoramas that feel stretched or cramped.
+ */
 const SKYBOX_VARIANTS: Record<
   string,
   {
@@ -84,6 +105,9 @@ uniform float yaw;
 uniform float pitch;
 uniform float endingProgress;
 uniform float chromaAberration;
+uniform float zoom;
+uniform float horizontalFovScale;
+uniform float verticalFovScale;
 uniform vec3 tintLow;
 uniform vec3 tintHigh;
 uniform float saturationBase;
@@ -119,7 +143,11 @@ void main(void) {
   uv.x *= aspect;
 
   float groove = clamp(grooveIntensity, 0.0, 1.0);
-  vec3 dir = normalize(vec3(uv.x * 2.18, uv.y * 1.92, 0.78 - groove * 0.03));
+  vec3 dir = normalize(vec3(
+    uv.x * horizontalFovScale / max(zoom, 0.001),
+    uv.y * verticalFovScale / max(zoom, 0.001),
+    0.78 - groove * 0.03
+  ));
   dir = rotationY(yaw) * rotationX(pitch) * dir;
 
   float panoU = atan(dir.x, dir.z) / (2.0 * PI) + 0.5;
@@ -157,6 +185,8 @@ export const SKYBOX_360_BACKDROP: BackdropModule = {
     "Experimental 360 panorama backdrop rendered through an equirectangular shader plane.",
   performanceTier: "medium",
   create(context) {
+    const readNumberParam = (key: string, fallback: number) =>
+      typeof context.params[key] === "number" ? context.params[key] : fallback;
     const panoramaSource = typeof context.params.panoramaUrl === "string" ? context.params.panoramaUrl : panoramaUrl;
     const variantName =
       typeof context.params.variant === "string" && context.params.variant in SKYBOX_VARIANTS
@@ -165,6 +195,9 @@ export const SKYBOX_360_BACKDROP: BackdropModule = {
     const variant = SKYBOX_VARIANTS[variantName];
     const yawCenterDegrees =
       typeof context.params.yawCenterDegrees === "number" ? context.params.yawCenterDegrees : 0;
+    const zoom = Math.max(0.45, readNumberParam("zoom", 1));
+    const horizontalFovScale = Math.max(0.8, readNumberParam("horizontalFovScale", 2.18));
+    const verticalFovScale = Math.max(0.8, readNumberParam("verticalFovScale", 1.92));
     const yawCenter = (yawCenterDegrees * Math.PI) / 180;
     const resolutionVector = new Vector2(context.engine.getRenderWidth(), context.engine.getRenderHeight());
     const plane = MeshBuilder.CreatePlane("skybox-360-plane", { width: 2, height: 2 }, context.scene);
@@ -194,6 +227,9 @@ export const SKYBOX_360_BACKDROP: BackdropModule = {
           "pitch",
           "endingProgress",
           "chromaAberration",
+          "zoom",
+          "horizontalFovScale",
+          "verticalFovScale",
           "tintLow",
           "tintHigh",
           "saturationBase",
@@ -214,6 +250,9 @@ export const SKYBOX_360_BACKDROP: BackdropModule = {
     material.setFloat("pitch", 0);
     material.setFloat("endingProgress", 0);
     material.setFloat("chromaAberration", 0);
+    material.setFloat("zoom", zoom);
+    material.setFloat("horizontalFovScale", horizontalFovScale);
+    material.setFloat("verticalFovScale", verticalFovScale);
     material.setVector3("tintLow", new Vector3(variant.tintLow[0], variant.tintLow[1], variant.tintLow[2]));
     material.setVector3("tintHigh", new Vector3(variant.tintHigh[0], variant.tintHigh[1], variant.tintHigh[2]));
     material.setFloat("saturationBase", variant.saturationBase);

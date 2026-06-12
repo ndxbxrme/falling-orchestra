@@ -303,7 +303,7 @@ export class UIOverlay {
     }, 320);
   }
 
-  playLaunchCountdown(): void {
+  playLaunchCountdown(stepMs: number): void {
     this.bannerQueue = [];
     this.activeBanner = false;
     window.clearTimeout(this.bannerTimeoutId);
@@ -312,7 +312,7 @@ export class UIOverlay {
     steps.forEach((step, index) => {
       window.setTimeout(() => {
         this.enqueueBanner(step, "#eaf7ff", window.innerWidth * 0.5, window.innerHeight * 0.5);
-      }, index * 620);
+      }, index * stepMs);
     });
   }
 

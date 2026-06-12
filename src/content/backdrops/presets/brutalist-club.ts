@@ -1,15 +1,32 @@
 import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { Vector2 } from "@babylonjs/core/Maths/math.vector";
+import { Vector2, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import type { BackdropModule } from "../schema";
 
+/**
+ * Variants:
+ * - `signal-amber`
+ * - `cold-steel`
+ * - `warehouse-neon`
+ * - `red-room`
+ *
+ * Overrides:
+ * - `backdropParams.variant`
+ * - `backdropParams.brightnessScale`
+ * - `backdropParams.laserBoost`
+ *
+ * Notes:
+ * - This is the baseline corridor/club environment.
+ * - Prefer using a named `variant` first, then small trims with the numeric overrides.
+ */
 interface BackdropFrame {
   concrete: Mesh[];
   lampMaterial: StandardMaterial;
   reflectionMaterial: StandardMaterial;
+  concreteMaterial?: StandardMaterial;
 }
 
 interface BackdropLaser {
@@ -24,6 +41,101 @@ const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
 const hex = (value: string): Color3 => Color3.FromHexString(value);
+const clamp01 = (value: number): number => clamp(value, 0, 1);
+const readNumberParam = (
+  params: Record<string, string | number | boolean>,
+  key: string,
+  fallback: number,
+): number => (typeof params[key] === "number" ? params[key] : fallback);
+
+type BrutalistClubVariant = {
+  baseColor: [number, number, number];
+  fogLow: [number, number, number];
+  fogHigh: [number, number, number];
+  laserA: [number, number, number];
+  laserB: [number, number, number];
+  lampWarm: [number, number, number];
+  lampCold: [number, number, number];
+  concreteFront: string;
+  concreteBack: string;
+  backWall: string;
+  reflectionWarm: string;
+  reflectionCold: string;
+  backdropVisibility: number;
+  brightnessScale: number;
+  laserBoost: number;
+};
+
+const BRUTALIST_CLUB_VARIANTS: Record<string, BrutalistClubVariant> = {
+  "signal-amber": {
+    baseColor: [0.01, 0.012, 0.016],
+    fogLow: [0.028, 0.024, 0.02],
+    fogHigh: [0.018, 0.026, 0.034],
+    laserA: [0.0, 0.9, 0.88],
+    laserB: [0.48, 1.0, 0.72],
+    lampWarm: [1.0, 0.58, 0.16],
+    lampCold: [0.56, 0.76, 1.0],
+    concreteFront: "#565961",
+    concreteBack: "#3d4148",
+    backWall: "#474b52",
+    reflectionWarm: "#9f6734",
+    reflectionCold: "#315269",
+    backdropVisibility: 0.62,
+    brightnessScale: 1,
+    laserBoost: 1,
+  },
+  "cold-steel": {
+    baseColor: [0.008, 0.011, 0.017],
+    fogLow: [0.016, 0.022, 0.03],
+    fogHigh: [0.02, 0.034, 0.046],
+    laserA: [0.4, 0.86, 1.0],
+    laserB: [0.66, 0.86, 1.0],
+    lampWarm: [0.72, 0.84, 0.96],
+    lampCold: [0.52, 0.82, 1.0],
+    concreteFront: "#4d5761",
+    concreteBack: "#364049",
+    backWall: "#3c464f",
+    reflectionWarm: "#586e83",
+    reflectionCold: "#2f556e",
+    backdropVisibility: 0.6,
+    brightnessScale: 0.96,
+    laserBoost: 0.92,
+  },
+  "warehouse-neon": {
+    baseColor: [0.01, 0.014, 0.015],
+    fogLow: [0.02, 0.03, 0.024],
+    fogHigh: [0.018, 0.04, 0.032],
+    laserA: [0.2, 1.0, 0.9],
+    laserB: [0.92, 1.0, 0.32],
+    lampWarm: [0.96, 0.74, 0.24],
+    lampCold: [0.42, 1.0, 0.82],
+    concreteFront: "#58574f",
+    concreteBack: "#41423a",
+    backWall: "#4c4c44",
+    reflectionWarm: "#947542",
+    reflectionCold: "#2f685d",
+    backdropVisibility: 0.66,
+    brightnessScale: 1.03,
+    laserBoost: 1.08,
+  },
+  "red-room": {
+    baseColor: [0.015, 0.01, 0.011],
+    fogLow: [0.032, 0.014, 0.015],
+    fogHigh: [0.05, 0.02, 0.024],
+    laserA: [1.0, 0.26, 0.34],
+    laserB: [1.0, 0.58, 0.16],
+    lampWarm: [1.0, 0.42, 0.18],
+    lampCold: [0.9, 0.3, 0.44],
+    concreteFront: "#5b4848",
+    concreteBack: "#463536",
+    backWall: "#503b3c",
+    reflectionWarm: "#875039",
+    reflectionCold: "#6d2e40",
+    backdropVisibility: 0.64,
+    brightnessScale: 0.98,
+    laserBoost: 1.02,
+  },
+};
 
 const BACKDROP_VERTEX_SHADER = `
 precision highp float;
@@ -51,6 +163,12 @@ uniform float grooveIntensity;
 uniform vec2 resolution;
 uniform vec2 scrollDirection;
 uniform vec2 scrollOffset;
+uniform float brightnessScale;
+uniform vec3 baseColor;
+uniform vec3 fogLowColor;
+uniform vec3 fogHighColor;
+uniform vec3 laserColorA;
+uniform vec3 laserColorB;
 
 mat2 rot(float angle) {
   float s = sin(angle);
@@ -111,10 +229,10 @@ void main(void) {
   );
   uv += cam;
 
-  vec3 color = vec3(0.01, 0.012, 0.016);
-  vec3 fogColor = mix(vec3(0.028, 0.024, 0.02), vec3(0.018, 0.026, 0.034), level2);
-  fogColor = mix(fogColor, vec3(0.025, 0.032, 0.038), level3);
-  fogColor = mix(fogColor, vec3(0.06, 0.065, 0.074), beatPulse * 0.12 * level4);
+  vec3 color = baseColor;
+  vec3 fogColor = mix(fogLowColor, fogHighColor, level2);
+  fogColor = mix(fogColor, mix(fogLowColor, fogHighColor, 0.55), level3);
+  fogColor = mix(fogColor, fogHighColor * 1.75, beatPulse * 0.12 * level4);
 
   float horizonY = -0.08 + level2 * 0.02;
   float depth = 1.0 / max(uv.y + 1.18, 0.18);
@@ -144,7 +262,7 @@ void main(void) {
 
   vec3 lampWarm = vec3(1.0, 0.58, 0.16);
   vec3 lampCold = vec3(0.56, 0.76, 1.0);
-  vec3 laserColor = mix(vec3(0.0, 0.9, 0.88), vec3(0.48, 1.0, 0.72), 0.45);
+  vec3 laserColor = mix(laserColorA, laserColorB, 0.45);
 
   float lampSpacing = 2.15;
   float lampPulse = fract(world.y / lampSpacing + 0.12);
@@ -186,6 +304,7 @@ void main(void) {
 
   float strobe = level4 * beatPulse * smoothstep(0.8, 0.2, abs(uv.x));
   color += lampCold * strobe * 0.35 + laserColor * strobe * 0.22;
+  color *= brightnessScale;
 
   gl_FragColor = vec4(color, 1.0);
 }
@@ -206,6 +325,19 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
     const resolutionVector = new Vector2(engine.getRenderWidth(), engine.getRenderHeight());
     const scrollDirectionVector = new Vector2(0.78, -0.24);
     const scrollOffsetVector = new Vector2(0, 0);
+    const variantName =
+      typeof context.params.variant === "string" && context.params.variant in BRUTALIST_CLUB_VARIANTS
+        ? context.params.variant
+        : "signal-amber";
+    const variant = BRUTALIST_CLUB_VARIANTS[variantName];
+    const brightnessScale = Math.max(0.65, readNumberParam(context.params, "brightnessScale", variant.brightnessScale));
+    const laserBoost = Math.max(0.5, readNumberParam(context.params, "laserBoost", variant.laserBoost));
+    const lampWarmColor = new Color3(variant.lampWarm[0], variant.lampWarm[1], variant.lampWarm[2]);
+    const lampColdColor = new Color3(variant.lampCold[0], variant.lampCold[1], variant.lampCold[2]);
+    const laserAColor = new Color3(variant.laserA[0], variant.laserA[1], variant.laserA[2]);
+    const laserBColor = new Color3(variant.laserB[0], variant.laserB[1], variant.laserB[2]);
+    const reflectionWarmColor = hex(variant.reflectionWarm);
+    const reflectionColdColor = hex(variant.reflectionCold);
     let backdropPlane: Mesh | undefined;
     let backdropMaterial: ShaderMaterial | undefined;
 
@@ -244,6 +376,12 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
             "resolution",
             "scrollDirection",
             "scrollOffset",
+            "brightnessScale",
+            "baseColor",
+            "fogLowColor",
+            "fogHighColor",
+            "laserColorA",
+            "laserColorB",
           ],
         },
       );
@@ -254,15 +392,21 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
       backdropMaterial.setVector2("resolution", resolutionVector);
       backdropMaterial.setVector2("scrollDirection", scrollDirectionVector);
       backdropMaterial.setVector2("scrollOffset", scrollOffsetVector);
+      backdropMaterial.setFloat("brightnessScale", brightnessScale);
+      backdropMaterial.setVector3("baseColor", new Vector3(variant.baseColor[0], variant.baseColor[1], variant.baseColor[2]));
+      backdropMaterial.setVector3("fogLowColor", new Vector3(variant.fogLow[0], variant.fogLow[1], variant.fogLow[2]));
+      backdropMaterial.setVector3("fogHighColor", new Vector3(variant.fogHigh[0], variant.fogHigh[1], variant.fogHigh[2]));
+      backdropMaterial.setVector3("laserColorA", new Vector3(variant.laserA[0], variant.laserA[1], variant.laserA[2]));
+      backdropMaterial.setVector3("laserColorB", new Vector3(variant.laserB[0], variant.laserB[1], variant.laserB[2]));
       backdropPlane.material = backdropMaterial;
-      backdropPlane.visibility = 0.62;
+      backdropPlane.visibility = variant.backdropVisibility;
 
       const fogBand = MeshBuilder.CreatePlane("backdrop-fog-band", {
         width: 54,
         height: 10,
       }, scene);
       fogBand.position.set(0, -6.8, 8);
-      fogBand.material = createFlatMaterial("backdrop-fog-band-material", "#0a1116", 0.42);
+      fogBand.material = createFlatMaterial("backdrop-fog-band-material", variant.concreteBack, 0.32);
       meshes.push(fogBand);
 
       const frameCount = 6;
@@ -276,7 +420,7 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
         const concreteAlpha = 0.58 - index * 0.035;
         const concreteMaterial = createFlatMaterial(
           `backdrop-frame-${index}-concrete`,
-          index === 0 ? "#565961" : "#3d4148",
+          index === 0 ? variant.concreteFront : variant.concreteBack,
           concreteAlpha,
         );
 
@@ -355,10 +499,11 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
           concrete: [leftPillar, rightPillar, topBeam, insetLeft, insetRight],
           lampMaterial,
           reflectionMaterial,
+          concreteMaterial,
         });
       }
 
-      const backWallMaterial = createFlatMaterial("backdrop-back-wall-material", "#474b52", 0.34);
+      const backWallMaterial = createFlatMaterial("backdrop-back-wall-material", variant.backWall, 0.34);
       const backWall = MeshBuilder.CreatePlane("backdrop-back-wall", {
         width: 7.2,
         height: 5.4,
@@ -370,6 +515,7 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
         concrete: [backWall],
         lampMaterial: createFlatMaterial("backdrop-back-wall-dummy-lamp", "#000000", 0),
         reflectionMaterial: createFlatMaterial("backdrop-back-wall-dummy-reflect", "#000000", 0),
+        concreteMaterial: backWallMaterial,
       });
 
       for (const direction of [-1, 1]) {
@@ -436,10 +582,6 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
         const level2 = clamp((groove - 0.18) / 0.24, 0, 1);
         const level3 = clamp((groove - 0.46) / 0.2, 0, 1);
         const level4 = clamp((groove - 0.76) / 0.2, 0, 1);
-        const amber = hex("#9f5218");
-        const steel = hex("#5e768c");
-        const laserA = hex("#57ffe0");
-        const laserB = hex("#7de86f");
 
         for (let index = 0; index < backdropFrames.length; index += 1) {
           const frame = backdropFrames[index];
@@ -451,20 +593,25 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
           for (let meshIndex = 0; meshIndex < frame.concrete.length; meshIndex += 1) {
             frame.concrete[meshIndex].visibility = visibilityRamp;
           }
+          if (frame.concreteMaterial) {
+            frame.concreteMaterial.emissiveColor = frame.concreteMaterial.diffuseColor.scale(
+              (0.18 + level2 * 0.06 + landingLift * 0.08) * brightnessScale * powerDown,
+            );
+          }
 
-          const lampColor = Color3.Lerp(amber, steel, level2);
+          const lampColor = Color3.Lerp(lampWarmColor, lampColdColor, level2);
           frame.lampMaterial.diffuseColor = lampColor;
           frame.lampMaterial.emissiveColor = lampColor.scale(
-            (0.34 + inputs.beatPulse * (0.32 + level3 * 0.24) + buildLift * 0.24 + landingLift * 0.42) * powerDown,
+            (0.34 + inputs.beatPulse * (0.32 + level3 * 0.24) + buildLift * 0.24 + landingLift * 0.42) * brightnessScale * powerDown,
           );
-          frame.lampMaterial.alpha = (0.2 + level2 * 0.1 + inputs.beatPulse * 0.08) * powerDown;
+          frame.lampMaterial.alpha = clamp01((0.2 + level2 * 0.1 + inputs.beatPulse * 0.08) * powerDown);
 
-          const reflectionColor = Color3.Lerp(hex("#6b431e"), hex("#2d4657"), level2);
+          const reflectionColor = Color3.Lerp(reflectionWarmColor, reflectionColdColor, level2);
           frame.reflectionMaterial.diffuseColor = reflectionColor;
           frame.reflectionMaterial.emissiveColor = reflectionColor.scale(
-            (0.14 + inputs.beatPulse * 0.12) * powerDown,
+            (0.14 + inputs.beatPulse * 0.12) * brightnessScale * powerDown,
           );
-          frame.reflectionMaterial.alpha = (0.06 + level2 * 0.05 + level3 * 0.04) * powerDown;
+          frame.reflectionMaterial.alpha = clamp01((0.06 + level2 * 0.05 + level3 * 0.04) * powerDown);
         }
 
         for (let index = 0; index < backdropLasers.length; index += 1) {
@@ -473,17 +620,20 @@ export const BRUTALIST_CLUB_BACKDROP_MODULE: BackdropModule = {
           laser.mesh.rotation.z = laser.direction * (0.12 + level3 * 0.42 + sweep * 0.08);
           laser.mesh.position.x = laser.baseX + laser.direction * sweep * 1.2;
           laser.mesh.position.y = laser.baseY;
-          laser.material.diffuseColor = index === 0 ? laserA : laserB;
-          laser.material.emissiveColor = (index === 0 ? laserA : laserB).scale(
-            level3 * (0.3 + inputs.beatPulse * (0.7 + level4 * 0.8) + buildLift * 0.4 + landingLift * 0.68) * powerDown,
+          laser.material.diffuseColor = index === 0 ? laserAColor : laserBColor;
+          laser.material.emissiveColor = (index === 0 ? laserAColor : laserBColor).scale(
+            level3 * (0.3 + inputs.beatPulse * (0.7 + level4 * 0.8) + buildLift * 0.4 + landingLift * 0.68) * laserBoost * brightnessScale * powerDown,
           );
-          laser.material.alpha =
-            (level3 * 0.3 + level4 * 0.28 + inputs.beatPulse * level4 * 0.18 + buildLift * 0.12 + landingLift * 0.24) * powerDown;
+          laser.material.alpha = clamp01(
+            (level3 * 0.3 + level4 * 0.28 + inputs.beatPulse * level4 * 0.18 + buildLift * 0.12 + landingLift * 0.24) *
+            laserBoost *
+            powerDown,
+          );
           laser.mesh.visibility = level3 * powerDown;
         }
 
         if (backdropPlane) {
-          backdropPlane.visibility = 0.62 - inputs.endingProgress * 0.16;
+          backdropPlane.visibility = variant.backdropVisibility - inputs.endingProgress * 0.16;
         }
       },
       resize(bounds) {
