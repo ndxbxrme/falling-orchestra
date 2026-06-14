@@ -213,6 +213,122 @@ Notes:
 - it trims each clip to its authored bar duration before concatenating
 - `ffmpeg` must be available on your machine
 
+### Local Authoring API
+
+The browser authoring tool can now talk to a lightweight local Python API so it can write directly to packaged `song.ts` and `config.ts` files.
+
+Run it in a second terminal:
+
+```bash
+npm run authoring:api
+```
+
+It listens on:
+
+```txt
+http://127.0.0.1:8765
+```
+
+Then open the authoring tool as usual:
+
+```txt
+http://localhost:5177/?tool=authoring
+```
+
+When the API is connected, Harmony Studio can now:
+
+- save `harmonyTimeline` directly to the selected song’s `config.ts`
+- save `grooveChangeAfterBars` for the selected transition clip
+- save per-song `backdropPreset` / `backdropParams` to `song.ts`
+- trigger album import/bootstrap endpoints programmatically
+
+Notes:
+
+- if the API is offline, `Save to config.ts` falls back to the older file-handle binding flow
+- landing-bar saving and song-backdrop saving require the local API
+- the current API is intentionally narrow and focused on the highest-friction edits
+
+### Album Import Bootstrap
+
+There is now a draft import pipeline for taking a prepared source folder of loop files and turning it into a packaged in-game album.
+
+The importer expects either:
+
+1. an `album.json` manifest plus referenced audio/assets
+2. or a source folder full of numbered song directories (`1/`, `2/`, `3/`...) which you bootstrap into an `album.json` first
+
+Bootstrap a draft manifest from numbered folders:
+
+```bash
+npm run import:album -- \
+  --source-dir "/mnt/d/Downloads/falling orchestra audio/subterranean/2" \
+  --bootstrap-manifest \
+  --artist-id subterranean \
+  --artist-name "Subterranean" \
+  --album-title "Album 2"
+```
+
+That writes `album.json` into the source folder with placeholder song titles like `Track 1`, `Track 2`, etc. Edit that file, then run the real import:
+
+```bash
+npm run import:album -- \
+  --source-dir "/mnt/d/Downloads/falling orchestra audio/subterranean/2"
+```
+
+Useful flags:
+
+- `--dry-run`: print the planned import without writing files
+- `--no-hydrate`: scaffold and copy audio, but skip groove hydration
+
+`album.json` shape:
+
+```json
+{
+  "artistId": "subterranean",
+  "artistName": "Subterranean",
+  "albumId": "subterranean_album-2",
+  "title": "Album 2",
+  "year": 2026,
+  "description": "",
+  "sortOrder": 999,
+  "availability": "hidden",
+  "tags": [],
+  "theme": {
+    "accent": "#7ee9ef",
+    "accentSoft": "#213645",
+    "text": "#eaf7ff",
+    "background": "#081522",
+    "panel": "#101b29",
+    "backdropPreset": "brutalist-club"
+  },
+  "songs": [
+    {
+      "title": "Track 1",
+      "slug": "track-01",
+      "id": "subterranean_track-01",
+      "trackNumber": 1,
+      "difficulty": 3,
+      "energy": 3,
+      "moodTags": ["dark", "driving"],
+      "recommendedWeight": 0.7,
+      "availability": "hidden",
+      "audioDir": "1",
+      "bpm": 120,
+      "beatsPerBar": 4,
+      "barsPerLoop": 4,
+      "harmonyCycleBars": 8,
+      "rootNote": "C",
+      "mode": "pentatonicMinor"
+    }
+  ]
+}
+```
+
+Asset handling rules:
+
+- any string value in `coverArt`, `theme.backdropParams`, or `song.backdropParams` that points at a real file relative to the source folder is copied into the packaged album/song and turned into a TypeScript asset import automatically
+- `audioDir` should point to the folder containing that song’s `.ogg` loop files
+
 ### Local Audio Metadata POC
 
 There is now a narrow proof-of-concept path for trying local audio-model metadata generation.

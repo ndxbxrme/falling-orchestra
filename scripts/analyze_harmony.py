@@ -132,16 +132,12 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(report_lines), encoding="utf-8")
 
-    json_path = output_path.with_suffix(".json")
     json_payload = json.dumps(report_json, indent=2)
-    json_path.write_text(json_payload, encoding="utf-8")
-
     public_json_path = repo_root / "public" / "docs" / "harmony_suggestions.json"
     public_json_path.parent.mkdir(parents=True, exist_ok=True)
     public_json_path.write_text(json_payload, encoding="utf-8")
 
     print(f"Wrote {output_path.relative_to(repo_root)}")
-    print(f"Wrote {json_path.relative_to(repo_root)}")
     print(f"Wrote {public_json_path.relative_to(repo_root)}")
 
 

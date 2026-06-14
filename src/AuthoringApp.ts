@@ -76,6 +76,50 @@ declare global {
   }
 }
 
+type LocalAuthoringApiHealth = {
+  ok: boolean;
+};
+
+type AuthoringViewMode = "harmony" | "import";
+
+type ImportSongDraft = {
+  trackNumber: number;
+  folderName: string;
+  title: string;
+  slug: string;
+  id: string;
+  difficulty: number;
+  energy: number;
+  moodTags: string;
+  recommendedWeight: number;
+  availability: string;
+  bpm: number;
+  beatsPerBar: number;
+  barsPerLoop: number;
+  harmonyCycleBars: number;
+  rootNote: RootNoteName;
+  mode: ScaleModeName;
+  files: File[];
+  warnings: string[];
+};
+
+type ImportAlbumDraft = {
+  sourceLabel: string;
+  artistId: string;
+  artistName: string;
+  albumId: string;
+  title: string;
+  year: number;
+  description: string;
+  sortOrder: number;
+  availability: string;
+  tags: string;
+  coverArtPath: string;
+  backdropPreset: string;
+  extraFiles: File[];
+  songs: ImportSongDraft[];
+};
+
 const ROOT_OPTIONS = Object.keys(ROOT_NOTES) as RootNoteName[];
 const MODE_OPTIONS = Object.keys(MODE_LABELS) as ScaleModeName[];
 
@@ -89,6 +133,12 @@ const escapeHtml = (value: string): string =>
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
+
+const slugify = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "untitled";
 
 const midiToFrequency = (midi: number): number => 440 * (2 ** ((midi - 69) / 12));
 
@@ -184,6 +234,60 @@ const renderHarmonyTimeline = (bars: HarmonyBarState[]): string => {
     ),
     "  ]",
   ].join("\n");
+};
+
+const parseImportedSongWarnings = (files: File[]): string[] => {
+  const grouped = new Map<number, Set<AuthoringClipRole>>();
+  for (const file of files) {
+    const name = file.name;
+    const stem = name.replace(/\.[^.]+$/, "");
+    let key: number | null = null;
+    let role: AuthoringClipRole | null = null;
+    const matchers: Array<[RegExp, (match: RegExpMatchArray) => [number, AuthoringClipRole]]> = [
+      [/^gl(\d+)_(main|intro)$/i, (match) => [Number(match[1]), match[2].toLowerCase() as AuthoringClipRole]],
+      [/^gl(\d+)_(finale)$/i, (match) => [Number(match[1]), "finale"]],
+      [/^(\d+)([im])$/i, (match) => [Number(match[1]), match[2].toLowerCase() === "i" ? "intro" : "main"]],
+      [/^(\d+)_(main|intro|finale)$/i, (match) => [Number(match[1]), match[2].toLowerCase() as AuthoringClipRole]],
+    ];
+    for (const [pattern, resolve] of matchers) {
+      const match = stem.match(pattern);
+      if (match) {
+        [key, role] = resolve(match);
+        break;
+      }
+    }
+    if (key === null || role === null) {
+      continue;
+    }
+    const existing = grouped.get(key) ?? new Set<AuthoringClipRole>();
+    existing.add(role);
+    grouped.set(key, existing);
+  }
+
+  const warnings: string[] = [];
+  const keys = Array.from(grouped.keys()).sort((a, b) => a - b);
+  const lastKey = keys[keys.length - 1] ?? 0;
+  for (const key of keys) {
+    const roles = grouped.get(key) ?? new Set<AuthoringClipRole>();
+    const isFinalLike = key === lastKey && (roles.has("finale") || (roles.has("intro") && !roles.has("main")));
+    if (isFinalLike) {
+      if (!roles.has("finale") && !roles.has("intro")) {
+        warnings.push(`final groove group ${key} is missing its ending intro/finale clip`);
+      }
+      continue;
+    }
+    if (!roles.has("intro") || !roles.has("main")) {
+      const missing: string[] = [];
+      if (!roles.has("intro")) {
+        missing.push("intro");
+      }
+      if (!roles.has("main")) {
+        missing.push("main");
+      }
+      warnings.push(`groove group ${key} is missing ${missing.join(", ")} clip(s)`);
+    }
+  }
+  return warnings;
 };
 
 const replaceNumberField = (text: string, fieldName: string, value: number): string => {
@@ -444,7 +548,9 @@ class AuthoringAuditionEngine {
 }
 
 export class AuthoringApp {
+  private readonly apiBaseUrl = "http://127.0.0.1:8765";
   private authoringRoot!: HTMLDivElement;
+  private importFolderInput?: HTMLInputElement;
   private audio = new Audio();
   private audition = new AuthoringAuditionEngine();
   private saveHandles = new Map<string, AuthoringFileHandle>();
@@ -464,6 +570,14 @@ export class AuthoringApp {
   private progressFill?: HTMLElement;
   private barRulerSpans: HTMLElement[] = [];
   private songStateLoadToken = 0;
+  private localApiAvailable = false;
+  private localApiChecked = false;
+  private backdropPresetDraft = "";
+  private backdropParamsDraft = "{}";
+  private viewMode: AuthoringViewMode = "harmony";
+  private importDraft?: ImportAlbumDraft;
+  private importStatus = "Pick a numbered album folder to bootstrap a draft import.";
+  private importBusy = false;
 
   constructor(private root: HTMLDivElement) {
     const firstAlbum = MUSIC_LIBRARY.albums[0];
@@ -481,6 +595,7 @@ export class AuthoringApp {
     this.renderShell();
     this.bindEvents();
     void this.loadSuggestions();
+    void this.detectLocalAuthoringApi();
     void this.syncSongState();
     this.updateUi();
   }
@@ -497,18 +612,25 @@ export class AuthoringApp {
   private renderShell(): void {
     this.root.innerHTML = `
       <div class="authoring-root"></div>
+      <input class="authoring-import-input" type="file" data-import-folder-input webkitdirectory directory multiple />
     `;
     const authoringRoot = this.root.querySelector<HTMLDivElement>(".authoring-root");
+    const importFolderInput = this.root.querySelector<HTMLInputElement>("[data-import-folder-input]");
     if (!authoringRoot) {
       throw new Error("Authoring root not created.");
     }
+    if (!importFolderInput) {
+      throw new Error("Authoring import input not created.");
+    }
     this.authoringRoot = authoringRoot;
+    this.importFolderInput = importFolderInput;
   }
 
   private bindEvents(): void {
     this.authoringRoot.addEventListener("change", this.handleChange);
     this.authoringRoot.addEventListener("click", this.handleClick);
     this.authoringRoot.addEventListener("input", this.handleInput);
+    this.importFolderInput?.addEventListener("change", this.handleImportFolderPicked);
     this.audio.addEventListener("ended", () => {
       this.syncPlaybackUi();
     });
@@ -608,17 +730,92 @@ export class AuthoringApp {
         mode: target.value as ScaleModeName,
       };
       this.updateUi();
+      return;
+    }
+
+    const importField = target.dataset.importField;
+    if (importField && this.importDraft) {
+      const songIndex = Number(target.dataset.songIndex ?? "-1");
+      if (songIndex >= 0) {
+        const songDraft = this.importDraft.songs[songIndex];
+        if (songDraft) {
+          (songDraft as unknown as Record<string, string>)[importField] = target.value;
+          if (importField === "rootNote") {
+            songDraft.rootNote = target.value as RootNoteName;
+          }
+          if (importField === "mode") {
+            songDraft.mode = target.value as ScaleModeName;
+          }
+        }
+      } else {
+        (this.importDraft as unknown as Record<string, string>)[importField] = target.value;
+      }
+      this.updateUi();
     }
   };
 
   private handleInput = (event: Event): void => {
     const target = event.target as HTMLElement | null;
-    if (!(target instanceof HTMLInputElement)) {
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
       return;
     }
     if (target.dataset.cycleBars !== undefined) {
       const nextLength = clamp(Number(target.value) || this.harmonyCycleBars, 1, 16);
       this.setHarmonyCycleBars(nextLength);
+      this.updateUi();
+      return;
+    }
+
+    if (target instanceof HTMLInputElement && target.dataset.backdropPreset !== undefined) {
+      this.backdropPresetDraft = target.value;
+      this.updateUi();
+      return;
+    }
+
+    if (target instanceof HTMLTextAreaElement && target.dataset.backdropParams !== undefined) {
+      this.backdropParamsDraft = target.value;
+      this.updateUi();
+      return;
+    }
+
+    const importField = target.dataset.importField;
+    if (importField && this.importDraft) {
+      const songIndex = Number(target.dataset.songIndex ?? "-1");
+      const assignDraftValue = (draft: ImportAlbumDraft | ImportSongDraft, field: string, rawValue: string): void => {
+        if (field === "year" || field === "sortOrder" || field === "difficulty" || field === "energy" || field === "bpm" || field === "beatsPerBar" || field === "barsPerLoop" || field === "harmonyCycleBars") {
+          (draft as Record<string, unknown>)[field] = Number(rawValue) || 0;
+          return;
+        }
+        if (field === "recommendedWeight") {
+          (draft as Record<string, unknown>)[field] = Number(rawValue) || 0;
+          return;
+        }
+        (draft as Record<string, unknown>)[field] = rawValue;
+      };
+
+      if (songIndex >= 0) {
+        const songDraft = this.importDraft.songs[songIndex];
+        if (songDraft) {
+          assignDraftValue(songDraft, importField, target.value);
+          if (importField === "title") {
+            const nextSlug = slugify(target.value || `track-${String(songDraft.trackNumber).padStart(2, "0")}`);
+            songDraft.slug = nextSlug;
+            songDraft.id = `${this.importDraft.artistId}_${nextSlug}`;
+          }
+        }
+      } else {
+        assignDraftValue(this.importDraft, importField, target.value);
+        if (importField === "title") {
+          this.importDraft.albumId = `${this.importDraft.artistId}_${slugify(target.value || "album")}`;
+        }
+        if (importField === "artistId") {
+          this.importDraft.albumId = `${target.value}_${slugify(this.importDraft.title || "album")}`;
+          this.importDraft.songs = this.importDraft.songs.map((songDraft) => ({
+            ...songDraft,
+            id: `${target.value}_${songDraft.slug}`,
+          }));
+        }
+      }
       this.updateUi();
     }
   };
@@ -695,8 +892,56 @@ export class AuthoringApp {
         mode: suggestion.mode,
       }));
       this.updateUi();
+      return;
+    }
+
+    if (action === "save-landing") {
+      void this.saveGrooveLanding();
+      return;
+    }
+
+    if (action === "save-backdrop") {
+      void this.saveSongBackdrop();
+      return;
+    }
+
+    if (action === "switch-harmony-view") {
+      this.viewMode = "harmony";
+      this.updateUi();
+      return;
+    }
+
+    if (action === "switch-import-view") {
+      this.viewMode = "import";
+      this.updateUi();
+      return;
+    }
+
+    if (action === "pick-import-folder") {
+      this.importFolderInput?.click();
+      return;
+    }
+
+    if (action === "run-import-upload") {
+      void this.runImportUpload();
     }
   };
+
+  private async detectLocalAuthoringApi(): Promise<void> {
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/health`);
+      if (!response.ok) {
+        throw new Error("health check failed");
+      }
+      const payload = await response.json() as LocalAuthoringApiHealth;
+      this.localApiAvailable = Boolean(payload.ok);
+    } catch {
+      this.localApiAvailable = false;
+    } finally {
+      this.localApiChecked = true;
+      this.updateUi();
+    }
+  }
 
   private async loadSuggestions(): Promise<void> {
     try {
@@ -822,6 +1067,8 @@ export class AuthoringApp {
 
     this.harmonyCycleBars = songConfig.transport.harmonyCycleBars;
     this.harmonyBars = expandHarmonyTimeline(songConfig.harmonyTimeline, this.harmonyCycleBars);
+    this.backdropPresetDraft = song.backdropPreset ?? "";
+    this.backdropParamsDraft = JSON.stringify(song.backdropParams ?? {}, null, 2);
     const firstClip = this.getSelectedSongClips()[0];
     this.selectedClipKey = firstClip?.key ?? "";
     this.selectedBarIndex = 0;
@@ -986,6 +1233,32 @@ export class AuthoringApp {
   }
 
   private async saveConfig(): Promise<void> {
+    const song = this.getSelectedSong();
+    if (this.localApiAvailable) {
+      try {
+        const response = await fetch(`${this.apiBaseUrl}/api/song-config/save-harmony`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            songId: song.id,
+            cycleBars: this.harmonyCycleBars,
+            bars: this.harmonyBars,
+          }),
+        });
+        const payload = await response.json() as { ok?: boolean; error?: string };
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error ?? "Direct save failed.");
+        }
+        this.statusMessage = "config.ts updated successfully via local API.";
+        this.updateUi();
+        return;
+      } catch (error) {
+        this.statusMessage = error instanceof Error ? error.message : "Local API save failed.";
+        this.updateUi();
+        return;
+      }
+    }
+
     let handle = this.saveHandles.get(this.getSelectedSong().id);
     if (!handle) {
       await this.pickConfigHandle();
@@ -1017,7 +1290,420 @@ export class AuthoringApp {
     this.updateUi();
   }
 
+  private getSelectedClipLandingBars(): number | "" {
+    const clip = this.getSelectedClip();
+    const songConfig = this.getSelectedSongConfig();
+    if (!clip || !songConfig || clip.role === "finale") {
+      return "";
+    }
+    const grooveLevel = songConfig.grooveLevels.find((entry) => entry.level === clip.grooveLevel);
+    const loopClip = clip.role === "intro" ? grooveLevel?.intro : grooveLevel?.main;
+    return loopClip?.grooveChangeAfterBars ?? "";
+  }
+
+  private async saveGrooveLanding(): Promise<void> {
+    if (!this.localApiAvailable) {
+      this.statusMessage = "Local authoring API is unavailable.";
+      this.updateUi();
+      return;
+    }
+    const clip = this.getSelectedClip();
+    if (!clip || clip.role === "finale") {
+      this.statusMessage = "Selected clip does not support groove landings.";
+      this.updateUi();
+      return;
+    }
+    const landingInput = this.authoringRoot.querySelector<HTMLInputElement>("[data-landing-bars]");
+    const nextValue = Math.max(0, Number(landingInput?.value ?? this.getSelectedClipLandingBars() ?? 0) || 0);
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/api/song-config/set-groove-landing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          songId: this.getSelectedSong().id,
+          grooveLevel: clip.grooveLevel,
+          role: clip.role,
+          grooveChangeAfterBars: nextValue,
+        }),
+      });
+      const payload = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Failed to save groove landing.");
+      }
+      const songConfig = this.getSelectedSongConfig();
+      const grooveLevel = songConfig?.grooveLevels.find((entry) => entry.level === clip.grooveLevel);
+      if (grooveLevel) {
+        const loopClip = clip.role === "intro" ? grooveLevel.intro : grooveLevel.main;
+        if (loopClip) {
+          loopClip.grooveChangeAfterBars = nextValue;
+        }
+      }
+      this.statusMessage = `Saved groove landing for L${clip.grooveLevel} ${clip.role}.`;
+      this.updateUi();
+    } catch (error) {
+      this.statusMessage = error instanceof Error ? error.message : "Failed to save groove landing.";
+      this.updateUi();
+    }
+  }
+
+  private async saveSongBackdrop(): Promise<void> {
+    if (!this.localApiAvailable) {
+      this.statusMessage = "Local authoring API is unavailable.";
+      this.updateUi();
+      return;
+    }
+    let parsedParams: Record<string, string | number | boolean> | null = null;
+    const trimmedPreset = this.backdropPresetDraft.trim();
+    const trimmedParams = this.backdropParamsDraft.trim();
+    try {
+      if (trimmedParams) {
+        const parsed = JSON.parse(trimmedParams);
+        if (parsed !== null && typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("Backdrop params JSON must be an object.");
+        }
+        parsedParams = parsed as Record<string, string | number | boolean>;
+      }
+    } catch (error) {
+      this.statusMessage = error instanceof Error ? error.message : "Invalid backdrop params JSON.";
+      this.updateUi();
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/api/song-manifest/set-backdrop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          songId: this.getSelectedSong().id,
+          backdropPreset: trimmedPreset || null,
+          backdropParams: parsedParams,
+        }),
+      });
+      const payload = await response.json() as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Failed to save song backdrop.");
+      }
+      const song = this.getSelectedSong();
+      song.backdropPreset = trimmedPreset || undefined;
+      song.backdropParams = parsedParams ?? undefined;
+      this.backdropParamsDraft = JSON.stringify(song.backdropParams ?? {}, null, 2);
+      this.statusMessage = "Saved song backdrop overrides.";
+      this.updateUi();
+    } catch (error) {
+      this.statusMessage = error instanceof Error ? error.message : "Failed to save song backdrop.";
+      this.updateUi();
+    }
+  }
+
+  private handleImportFolderPicked = (event: Event): void => {
+    const target = event.target as HTMLInputElement | null;
+    const files = Array.from(target?.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+    this.buildImportDraftFromFiles(files);
+    if (target) {
+      target.value = "";
+    }
+  };
+
+  private buildImportDraftFromFiles(files: File[]): void {
+    const sourceLabel = ((files[0] as File & { webkitRelativePath?: string }).webkitRelativePath ?? "").split("/")[0] || "folder import";
+    const topLevelFolders = new Map<string, File[]>();
+    const extraFiles: File[] = [];
+    for (const file of files) {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? file.name;
+      const [, topLevel, maybeFilename] = relativePath.split("/");
+      if (!topLevel) {
+        continue;
+      }
+      if (maybeFilename && !/^\d+$/.test(topLevel)) {
+        extraFiles.push(file);
+        continue;
+      }
+      if (!/^\d+$/.test(topLevel)) {
+        continue;
+      }
+      const bucket = topLevelFolders.get(topLevel) ?? [];
+      bucket.push(file);
+      topLevelFolders.set(topLevel, bucket);
+    }
+
+    const numberedFolders = Array.from(topLevelFolders.entries())
+      .sort((a, b) => Number(a[0]) - Number(b[0]));
+
+    if (numberedFolders.length === 0) {
+      this.importStatus = "No numbered song folders were detected.";
+      this.updateUi();
+      return;
+    }
+
+    const songs: ImportSongDraft[] = numberedFolders.map(([folderName, songFiles]) => {
+      const trackNumber = Number(folderName);
+      const slug = `track-${String(trackNumber).padStart(2, "0")}`;
+      return {
+        trackNumber,
+        folderName,
+        title: `Track ${trackNumber}`,
+        slug,
+        id: `artist_${slug}`,
+        difficulty: 3,
+        energy: 3,
+        moodTags: "dark,driving",
+        recommendedWeight: 0.7,
+        availability: "hidden",
+        bpm: 120,
+        beatsPerBar: 4,
+        barsPerLoop: 4,
+        harmonyCycleBars: 8,
+        rootNote: "C",
+        mode: "pentatonicMinor",
+        files: songFiles.filter((file) => file.name.toLowerCase().endsWith(".ogg")),
+        warnings: parseImportedSongWarnings(songFiles),
+      };
+    });
+
+    const selectedAlbumArtistId = this.getSelectedAlbum().artistId || "artist";
+    const artistId = slugify(selectedAlbumArtistId || "artist");
+    const albumTitle = sourceLabel.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "New Album";
+    const albumId = `${artistId}_${slugify(albumTitle)}`;
+    this.importDraft = {
+      sourceLabel,
+      artistId,
+      artistName: artistId.replace(/-/g, " ").replace(/\b\w/g, (char: string) => char.toUpperCase()),
+      albumId,
+      title: albumTitle,
+      year: new Date().getFullYear(),
+      description: "",
+      sortOrder: 999,
+      availability: "hidden",
+      tags: "",
+      coverArtPath: "",
+      backdropPreset: "brutalist-club",
+      extraFiles,
+      songs,
+    };
+    this.importStatus = `Prepared draft for ${songs.length} songs from ${sourceLabel}.`;
+    this.viewMode = "import";
+    this.updateUi();
+  }
+
+  private buildImportManifest(): Record<string, unknown> | null {
+    const draft = this.importDraft;
+    if (!draft) {
+      return null;
+    }
+    return {
+      artistId: draft.artistId,
+      artistName: draft.artistName,
+      albumId: draft.albumId,
+      title: draft.title,
+      year: draft.year,
+      description: draft.description,
+      sortOrder: draft.sortOrder,
+      availability: draft.availability,
+      tags: draft.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+      coverArt: draft.coverArtPath.trim() || undefined,
+      theme: {
+        accent: "#7ee9ef",
+        accentSoft: "#213645",
+        text: "#eaf7ff",
+        background: "#081522",
+        panel: "#101b29",
+        backdropPreset: draft.backdropPreset.trim() || "brutalist-club",
+      },
+      songs: draft.songs.map((song) => ({
+        title: song.title,
+        slug: song.slug,
+        id: song.id,
+        trackNumber: song.trackNumber,
+        difficulty: song.difficulty,
+        energy: song.energy,
+        moodTags: song.moodTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        recommendedWeight: song.recommendedWeight,
+        availability: song.availability,
+        audioDir: song.folderName,
+        bpm: song.bpm,
+        beatsPerBar: song.beatsPerBar,
+        barsPerLoop: song.barsPerLoop,
+        harmonyCycleBars: song.harmonyCycleBars,
+        rootNote: song.rootNote,
+        mode: song.mode,
+      })),
+    };
+  }
+
+  private async runImportUpload(): Promise<void> {
+    if (!this.localApiAvailable) {
+      this.importStatus = "Local authoring API is unavailable.";
+      this.updateUi();
+      return;
+    }
+    const draft = this.importDraft;
+    const manifest = this.buildImportManifest();
+    if (!draft || !manifest) {
+      this.importStatus = "No import draft is loaded.";
+      this.updateUi();
+      return;
+    }
+    this.importBusy = true;
+    this.importStatus = "Uploading album source and running import...";
+    this.updateUi();
+    try {
+      const formData = new FormData();
+      formData.append("manifest", JSON.stringify(manifest));
+      for (const song of draft.songs) {
+        for (const file of song.files) {
+          formData.append("files", file, `${song.folderName}/${file.name}`);
+        }
+      }
+      for (const file of draft.extraFiles) {
+        const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath ?? file.name).split("/").slice(1).join("/");
+        formData.append("files", file, relativePath || file.name);
+      }
+      const response = await fetch(`${this.apiBaseUrl}/api/import-album/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json() as { ok?: boolean; stdout?: string; stderr?: string; error?: string };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? payload.stderr ?? "Album import failed.");
+      }
+      this.importStatus = (payload.stdout?.trim() || "Album imported successfully.").trim();
+    } catch (error) {
+      this.importStatus = error instanceof Error ? error.message : "Album import failed.";
+    } finally {
+      this.importBusy = false;
+      this.updateUi();
+    }
+  }
+
+  private renderAuthoringHeader(title: string, subtitle: string): string {
+    return `
+      <header class="authoring-header">
+        <div>
+          <p class="library-kicker">Authoring Tool</p>
+          <h1>${escapeHtml(title)}</h1>
+          <p class="library-subtitle">${escapeHtml(subtitle)}</p>
+        </div>
+        <div class="authoring-actions">
+          <button type="button" class="library-chip${this.viewMode === "harmony" ? " active" : ""}" data-action="switch-harmony-view">Harmony Studio</button>
+          <button type="button" class="library-chip${this.viewMode === "import" ? " active" : ""}" data-action="switch-import-view">Album Import</button>
+        </div>
+      </header>
+    `;
+  }
+
+  private renderImportView(): string {
+    const draft = this.importDraft;
+    const totalWarnings = draft?.songs.reduce((count, song) => count + song.warnings.length, 0) ?? 0;
+    return `
+      <div class="authoring-shell">
+        ${this.renderAuthoringHeader("Album Import", "Turn a numbered folder of loop clips into a packaged album draft.")}
+        <div class="authoring-layout">
+          <aside class="authoring-sidebar">
+            <section class="authoring-panel">
+              <span class="section-label">Source</span>
+              <div class="authoring-actions authoring-actions-stack">
+                <button type="button" class="play-button" data-action="pick-import-folder">Pick Numbered Folder</button>
+                <button type="button" class="play-button" data-action="run-import-upload"${draft && this.localApiAvailable && !this.importBusy ? "" : " disabled"}>${this.importBusy ? "Importing..." : "Import Album"}</button>
+              </div>
+              <p class="authoring-copy">Local API: ${!this.localApiChecked ? "checking…" : this.localApiAvailable ? "connected" : "offline"}</p>
+              ${draft ? `<p class="authoring-copy">${draft.extraFiles.length} top-level asset file(s) detected.</p>` : ""}
+              <p class="authoring-copy">${escapeHtml(this.importStatus)}</p>
+            </section>
+
+            <section class="authoring-panel">
+              <span class="section-label">Warnings</span>
+              ${
+                !draft
+                  ? "<p class=\"authoring-empty\">Pick a folder to generate a draft.</p>"
+                  : totalWarnings > 0
+                    ? draft.songs
+                      .flatMap((song) => song.warnings.map((warning) => `<p class="authoring-copy"><strong>${String(song.trackNumber).padStart(2, "0")}</strong> · ${escapeHtml(warning)}</p>`))
+                      .join("")
+                    : "<p class=\"authoring-copy\">No structural warnings detected from the loop filenames.</p>"
+              }
+            </section>
+          </aside>
+
+          <main class="authoring-main">
+            <section class="authoring-panel">
+              <span class="section-label">Album Metadata</span>
+              ${
+                !draft
+                  ? "<p class=\"authoring-empty\">No import draft loaded.</p>"
+                  : `
+                    <div class="authoring-grid authoring-import-grid">
+                      <label class="authoring-label"><span>Artist Id</span><input data-import-field="artistId" type="text" value="${escapeHtml(draft.artistId)}" /></label>
+                      <label class="authoring-label"><span>Artist Name</span><input data-import-field="artistName" type="text" value="${escapeHtml(draft.artistName)}" /></label>
+                      <label class="authoring-label"><span>Album Id</span><input data-import-field="albumId" type="text" value="${escapeHtml(draft.albumId)}" /></label>
+                      <label class="authoring-label"><span>Album Title</span><input data-import-field="title" type="text" value="${escapeHtml(draft.title)}" /></label>
+                      <label class="authoring-label"><span>Year</span><input data-import-field="year" type="number" value="${draft.year}" /></label>
+                      <label class="authoring-label"><span>Sort Order</span><input data-import-field="sortOrder" type="number" value="${draft.sortOrder}" /></label>
+                      <label class="authoring-label"><span>Availability</span><select data-import-field="availability">
+                        ${["included", "locked", "hidden"].map((option) => `<option value="${option}"${draft.availability === option ? " selected" : ""}>${option}</option>`).join("")}
+                      </select></label>
+                      <label class="authoring-label"><span>Backdrop Preset</span><input data-import-field="backdropPreset" type="text" value="${escapeHtml(draft.backdropPreset)}" /></label>
+                      <label class="authoring-label"><span>Tags</span><input data-import-field="tags" type="text" value="${escapeHtml(draft.tags)}" placeholder="deep house, ambient house" /></label>
+                      <label class="authoring-label"><span>Cover Art Path</span><input data-import-field="coverArtPath" type="text" value="${escapeHtml(draft.coverArtPath)}" placeholder="cover.webp" /></label>
+                      <label class="authoring-label authoring-label-wide"><span>Description</span><textarea data-import-field="description" rows="4">${escapeHtml(draft.description)}</textarea></label>
+                    </div>
+                  `
+              }
+            </section>
+
+            <section class="authoring-panel">
+              <span class="section-label">Songs</span>
+              ${
+                !draft
+                  ? "<p class=\"authoring-empty\">Song drafts will appear here once a folder is loaded.</p>"
+                  : draft.songs.map((song, index) => `
+                    <div class="authoring-import-song">
+                      <div class="authoring-grid-head">
+                        <div>
+                          <h2>${String(song.trackNumber).padStart(2, "0")} · ${escapeHtml(song.folderName)}</h2>
+                          <p>${song.files.length} loop files</p>
+                        </div>
+                      </div>
+                      <div class="authoring-grid authoring-import-grid">
+                        <label class="authoring-label"><span>Title</span><input data-import-field="title" data-song-index="${index}" type="text" value="${escapeHtml(song.title)}" /></label>
+                        <label class="authoring-label"><span>Slug</span><input data-import-field="slug" data-song-index="${index}" type="text" value="${escapeHtml(song.slug)}" /></label>
+                        <label class="authoring-label"><span>Song Id</span><input data-import-field="id" data-song-index="${index}" type="text" value="${escapeHtml(song.id)}" /></label>
+                        <label class="authoring-label"><span>Difficulty</span><input data-import-field="difficulty" data-song-index="${index}" type="number" min="1" max="5" value="${song.difficulty}" /></label>
+                        <label class="authoring-label"><span>Energy</span><input data-import-field="energy" data-song-index="${index}" type="number" min="1" max="5" value="${song.energy}" /></label>
+                        <label class="authoring-label"><span>Mood Tags</span><input data-import-field="moodTags" data-song-index="${index}" type="text" value="${escapeHtml(song.moodTags)}" /></label>
+                        <label class="authoring-label"><span>Weight</span><input data-import-field="recommendedWeight" data-song-index="${index}" type="number" step="0.1" value="${song.recommendedWeight}" /></label>
+                        <label class="authoring-label"><span>Availability</span><select data-import-field="availability" data-song-index="${index}">
+                          ${["included", "locked", "hidden"].map((option) => `<option value="${option}"${song.availability === option ? " selected" : ""}>${option}</option>`).join("")}
+                        </select></label>
+                        <label class="authoring-label"><span>BPM</span><input data-import-field="bpm" data-song-index="${index}" type="number" value="${song.bpm}" /></label>
+                        <label class="authoring-label"><span>Beats/Bar</span><input data-import-field="beatsPerBar" data-song-index="${index}" type="number" value="${song.beatsPerBar}" /></label>
+                        <label class="authoring-label"><span>Bars/Loop</span><input data-import-field="barsPerLoop" data-song-index="${index}" type="number" value="${song.barsPerLoop}" /></label>
+                        <label class="authoring-label"><span>Harmony Cycle</span><input data-import-field="harmonyCycleBars" data-song-index="${index}" type="number" value="${song.harmonyCycleBars}" /></label>
+                        <label class="authoring-label"><span>Root Note</span><select data-import-field="rootNote" data-song-index="${index}">
+                          ${ROOT_OPTIONS.map((root) => `<option value="${root}"${song.rootNote === root ? " selected" : ""}>${root}</option>`).join("")}
+                        </select></label>
+                        <label class="authoring-label"><span>Mode</span><select data-import-field="mode" data-song-index="${index}">
+                          ${MODE_OPTIONS.map((mode) => `<option value="${mode}"${song.mode === mode ? " selected" : ""}>${MODE_LABELS[mode]}</option>`).join("")}
+                        </select></label>
+                      </div>
+                    </div>
+                  `).join("")
+              }
+            </section>
+          </main>
+        </div>
+      </div>
+    `;
+  }
+
   private updateUi(): void {
+    if (this.viewMode === "import") {
+      this.authoringRoot.innerHTML = this.renderImportView();
+      return;
+    }
+
     const album = this.getSelectedAlbum();
     const songs = this.getSongsForSelectedAlbum();
     const song = this.getSelectedSong();
@@ -1030,6 +1716,8 @@ export class AuthoringApp {
       clipSuggestions.bars.find((entry) => entry.bar === this.selectedBarIndex + 1)?.suggestions ?? [];
     const overallSuggestions = songConfig ? clipSuggestions.overall : [];
     const selectedBar = this.harmonyBars[this.selectedBarIndex] ?? this.harmonyBars[0] ?? { rootNote: "C", mode: "pentatonicMinor" as ScaleModeName };
+    const selectedClipLandingBars = this.getSelectedClipLandingBars();
+    const canSaveLanding = Boolean(songConfig && clip && clip.role !== "finale");
     const familyOptions = ["bell", "bass", "spark", "snare"]
       .map((family) => `<option value="${family}"${this.selectedFamily === family ? " selected" : ""}>${family}</option>`)
       .join("");
@@ -1044,13 +1732,7 @@ export class AuthoringApp {
 
     this.authoringRoot.innerHTML = `
       <div class="authoring-shell">
-        <header class="authoring-header">
-          <div>
-            <p class="library-kicker">Authoring Tool</p>
-            <h1>Harmony Studio</h1>
-            <p class="library-subtitle">Loop audition, harmony editing, sequenced preview, and config writeback.</p>
-          </div>
-        </header>
+        ${this.renderAuthoringHeader("Harmony Studio", "Loop audition, harmony editing, sequenced preview, and config writeback.")}
 
         <div class="authoring-layout">
           <aside class="authoring-sidebar">
@@ -1091,6 +1773,16 @@ export class AuthoringApp {
                     : "<option>Loading song config...</option>"}
                 </select>
               </label>
+              <p class="authoring-copy">
+                Local API:
+                ${
+                  !this.localApiChecked
+                    ? "checking…"
+                    : this.localApiAvailable
+                      ? "connected"
+                      : "offline"
+                }
+              </p>
             </section>
 
             <section class="authoring-panel">
@@ -1233,9 +1925,41 @@ export class AuthoringApp {
             </section>
 
             <section class="authoring-panel">
+              <span class="section-label">Groove Landing</span>
+              <label class="authoring-label">
+                <span>Selected Clip</span>
+                <input type="text" value="${clip ? `${clip.label}` : ""}" disabled />
+              </label>
+              <label class="authoring-label">
+                <span>grooveChangeAfterBars</span>
+                <input data-landing-bars type="number" min="0" max="${clip?.bars ?? 16}" value="${selectedClipLandingBars}" ${canSaveLanding ? "" : "disabled"} />
+              </label>
+              <div class="authoring-actions authoring-actions-stack">
+                <button type="button" class="play-button" data-action="save-landing"${canSaveLanding && this.localApiAvailable ? "" : " disabled"}>Save Landing</button>
+              </div>
+              <p class="authoring-copy">Best used on transition clips, usually the intro clip.</p>
+            </section>
+
+            <section class="authoring-panel">
+              <span class="section-label">Song Backdrop</span>
+              <label class="authoring-label">
+                <span>Backdrop Preset</span>
+                <input data-backdrop-preset type="text" value="${escapeHtml(this.backdropPresetDraft)}" placeholder="inherit album default" />
+              </label>
+              <label class="authoring-label">
+                <span>Backdrop Params JSON</span>
+                <textarea data-backdrop-params rows="8" spellcheck="false">${escapeHtml(this.backdropParamsDraft)}</textarea>
+              </label>
+              <div class="authoring-actions authoring-actions-stack">
+                <button type="button" class="play-button" data-action="save-backdrop"${this.localApiAvailable ? "" : " disabled"}>Save Backdrop</button>
+              </div>
+              <p class="authoring-copy">Leave preset blank to inherit the album backdrop. Params should be a JSON object.</p>
+            </section>
+
+            <section class="authoring-panel">
               <span class="section-label">Writeback</span>
               <div class="authoring-actions authoring-actions-stack">
-                <button type="button" class="library-chip" data-action="pick-config-file">Bind config.ts</button>
+                <button type="button" class="library-chip" data-action="pick-config-file"${this.localApiAvailable ? " disabled" : ""}>Bind config.ts</button>
                 <button type="button" class="play-button" data-action="save-config">Save to config.ts</button>
                 <button type="button" class="library-chip" data-action="copy-harmony">Copy harmonyTimeline</button>
               </div>
