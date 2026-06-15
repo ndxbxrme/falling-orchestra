@@ -24,6 +24,22 @@ class PreviewSong:
     clips: list[PreviewClip]
 
 
+def choose_preview_main_repeats(intro_bars: int, main_bars: int, average_total_bars: float, default_repeats: int) -> int:
+    default_total_bars = intro_bars + (main_bars * default_repeats)
+    if default_total_bars <= average_total_bars:
+        return default_repeats
+
+    best_repeats = 1
+    best_distance = float("inf")
+    for repeats in range(1, default_repeats + 1):
+        total_bars = intro_bars + (main_bars * repeats)
+        distance = abs(total_bars - average_total_bars)
+        if distance < best_distance or (distance == best_distance and repeats < best_repeats):
+            best_distance = distance
+            best_repeats = repeats
+    return best_repeats
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Render song preview audio using the same structure as the in-app preview player."
@@ -160,6 +176,22 @@ def parse_preview_song(config_file: Path, main_repeats: int) -> PreviewSong:
     groove_levels_block = extract_block(text, "grooveLevels", "[")
     level_blocks = split_top_level_objects(groove_levels_block)
     clips: list[PreviewClip] = []
+    groove_bar_totals: list[int] = []
+
+    for level_block in level_blocks:
+        intro = parse_clip_block(level_block, "intro", bpm, beats_per_bar)
+        main = parse_clip_block(level_block, "main", bpm, beats_per_bar)
+        if not main:
+            continue
+        intro_bars = int(round((intro.duration_seconds * bpm) / (60.0 * beats_per_bar))) if intro else 0
+        main_bars = int(round((main.duration_seconds * bpm) / (60.0 * beats_per_bar)))
+        groove_bar_totals.append(intro_bars + (main_bars * main_repeats))
+
+    average_total_bars = (
+        sum(groove_bar_totals) / len(groove_bar_totals)
+        if groove_bar_totals
+        else float(main_repeats * 4)
+    )
 
     for level_block in level_blocks:
         intro = parse_clip_block(level_block, "intro", bpm, beats_per_bar)
@@ -167,7 +199,10 @@ def parse_preview_song(config_file: Path, main_repeats: int) -> PreviewSong:
         if intro:
             clips.append(intro)
         if main:
-            clips.extend([main] * max(0, main_repeats))
+            intro_bars = int(round((intro.duration_seconds * bpm) / (60.0 * beats_per_bar))) if intro else 0
+            main_bars = int(round((main.duration_seconds * bpm) / (60.0 * beats_per_bar)))
+            repeats = choose_preview_main_repeats(intro_bars, main_bars, average_total_bars, main_repeats)
+            clips.extend([main] * max(0, repeats))
 
     return PreviewSong(bpm=bpm, beats_per_bar=beats_per_bar, clips=clips)
 

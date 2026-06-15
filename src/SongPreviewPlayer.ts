@@ -10,6 +10,31 @@ interface PreviewStep {
 }
 
 const INITIAL_PREVIEW_LEAD = 0.05;
+const DEFAULT_PREVIEW_MAIN_REPEATS = 3;
+
+const choosePreviewMainRepeats = (
+  introBars: number,
+  mainBars: number,
+  averageTotalBars: number,
+): number => {
+  const defaultTotalBars = introBars + (mainBars * DEFAULT_PREVIEW_MAIN_REPEATS);
+  if (defaultTotalBars <= averageTotalBars) {
+    return DEFAULT_PREVIEW_MAIN_REPEATS;
+  }
+
+  let bestRepeats = 1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let repeats = 1; repeats <= DEFAULT_PREVIEW_MAIN_REPEATS; repeats += 1) {
+    const totalBars = introBars + (mainBars * repeats);
+    const distance = Math.abs(totalBars - averageTotalBars);
+    if (distance < bestDistance || (distance === bestDistance && repeats < bestRepeats)) {
+      bestDistance = distance;
+      bestRepeats = repeats;
+    }
+  }
+
+  return bestRepeats;
+};
 
 export class SongPreviewPlayer {
   private audioContext?: AudioContext;
@@ -112,6 +137,12 @@ export class SongPreviewPlayer {
     const steps: PreviewStep[] = [];
     const beatsPerBar = song.transport.beatsPerBar;
     const bpm = song.transport.bpm;
+    const grooveBarTotals = song.grooveLevels
+      .filter((grooveLevel) => grooveLevel.main)
+      .map((grooveLevel) => (grooveLevel.intro?.bars ?? 0) + (grooveLevel.main!.bars * DEFAULT_PREVIEW_MAIN_REPEATS));
+    const averageTotalBars = grooveBarTotals.length > 0
+      ? grooveBarTotals.reduce((sum, totalBars) => sum + totalBars, 0) / grooveBarTotals.length
+      : DEFAULT_PREVIEW_MAIN_REPEATS * (song.grooveLevels[0]?.main?.bars ?? 4);
 
     for (const grooveLevel of song.grooveLevels) {
       if (grooveLevel.intro) {
@@ -122,7 +153,12 @@ export class SongPreviewPlayer {
       if (grooveLevel.main) {
         await this.ensureBufferLoaded(grooveLevel.main.src, context);
         const mainStep = this.createStep(grooveLevel.main, bpm, beatsPerBar);
-        steps.push(mainStep, mainStep, mainStep);
+        const repeats = choosePreviewMainRepeats(
+          grooveLevel.intro?.bars ?? 0,
+          grooveLevel.main.bars,
+          averageTotalBars,
+        );
+        steps.push(...Array.from({ length: repeats }, () => mainStep));
       }
     }
 

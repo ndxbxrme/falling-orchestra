@@ -12,7 +12,8 @@ export type SongMoodTag =
   | "broken"
   | "heavy"
   | "ambient"
-  | "melodic";
+  | "melodic"
+  | (string & {});
 
 export type LibraryRoute =
   | { view: "home" }

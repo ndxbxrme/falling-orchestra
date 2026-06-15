@@ -2,6 +2,7 @@
 import { AFTERBURNER_SLIPSTREAM_BACKDROP } from "./presets/afterburner-slipstream";
 import { BRUTALIST_CLUB_BACKDROP_MODULE } from "./presets/brutalist-club";
 import { GATECRASHER_REACTOR_BACKDROP } from "./presets/gatecrasher-reactor";
+import { IBIZA_SUN_BACKDROP } from "./presets/ibiza-sun";
 import { RAIN_WINDOW_BACKDROP } from "./presets/rain-window";
 import { RADAR_SHRINE_BACKDROP } from "./presets/radar-shrine";
 import { SCAFFOLD_TEST_BACKDROP } from "./presets/scaffold-test";
@@ -12,6 +13,7 @@ export const BACKDROP_MODULES: BackdropModule[] = [
   AFTERBURNER_SLIPSTREAM_BACKDROP,
   BRUTALIST_CLUB_BACKDROP_MODULE,
   GATECRASHER_REACTOR_BACKDROP,
+  IBIZA_SUN_BACKDROP,
   RAIN_WINDOW_BACKDROP,
   RADAR_SHRINE_BACKDROP,
   SCAFFOLD_TEST_BACKDROP,

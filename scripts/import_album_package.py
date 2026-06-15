@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,26 @@ class SongImportPlan:
     transport_defaults: dict[str, Any]
 
 
+def clamp(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, value))
+
+
+def infer_song_difficulty(audio_dir: Path) -> int:
+    try:
+        groove_count = len({clip.key for clip in collect_clips(audio_dir) if clip.kind in {"intro", "main", "finale"}})
+    except SystemExit:
+        groove_count = 1
+    if groove_count <= 1:
+        return 1
+    if groove_count == 2:
+        return 2
+    if groove_count == 3:
+        return 3
+    if groove_count == 4:
+        return 4
+    return 5
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Import a prepared album source folder into packaged in-game content."
@@ -84,6 +105,11 @@ def parse_args() -> argparse.Namespace:
         "--no-hydrate",
         action="store_true",
         help="Skip audio-driven groove hydration after copying clips.",
+    )
+    parser.add_argument(
+        "--apply-harmony-defaults",
+        action="store_true",
+        help="After import + hydration, run analyzer suggestions and set each song to its dominant default harmony.",
     )
     parser.add_argument("--artist-id", help="Artist id to use when bootstrapping album.json")
     parser.add_argument("--artist-name", help="Artist display name to use when bootstrapping album.json")
@@ -219,13 +245,14 @@ def load_song_plans(manifest: dict[str, Any], source_root: Path, artist_id: str)
         if not audio_dir.exists():
             raise SystemExit(f"Missing audioDir for song '{title}': {audio_dir}")
 
+        fallback_mood_tags = [str(tag) for tag in manifest.get("tags") or [] if isinstance(tag, str)] or ["dark", "driving"]
         transport_defaults = {
             "bpm": int(song.get("bpm") or 120),
             "beatsPerBar": int(song.get("beatsPerBar") or 4),
             "barsPerLoop": int(song.get("barsPerLoop") or 4),
             "harmonyCycleBars": int(song.get("harmonyCycleBars") or 8),
             "rootNote": str(song.get("rootNote") or "C"),
-            "mode": str(song.get("mode") or "pentatonicMinor"),
+            "mode": str(song.get("mode") or "major"),
         }
 
         plans.append(
@@ -234,9 +261,9 @@ def load_song_plans(manifest: dict[str, Any], source_root: Path, artist_id: str)
                 slug=slug,
                 song_id=song_id,
                 track_number=track_number,
-                difficulty=int(song.get("difficulty") or 3),
-                energy=int(song.get("energy") or 3),
-                mood_tags=[str(tag) for tag in song.get("moodTags") or ["dark", "driving"]],
+                difficulty=clamp(int(song.get("difficulty") or infer_song_difficulty(audio_dir)), 1, 5),
+                energy=clamp(int(song.get("energy") or 3), 1, 5),
+                mood_tags=[str(tag) for tag in song.get("moodTags") or fallback_mood_tags],
                 recommended_weight=float(song.get("recommendedWeight") or 0.7),
                 availability=str(song.get("availability") or manifest.get("availability") or "hidden"),
                 duration_label=str(song["durationLabel"]) if song.get("durationLabel") else None,
@@ -280,18 +307,7 @@ def build_bootstrap_manifest(args: argparse.Namespace, source_root: Path) -> dic
                 "slug": slug,
                 "id": f"{artist_id}_{slug}",
                 "trackNumber": track_number,
-                "difficulty": 3,
-                "energy": 3,
-                "moodTags": ["dark", "driving"],
-                "recommendedWeight": 0.7,
-                "availability": "hidden",
                 "audioDir": song_dir.name,
-                "bpm": 120,
-                "beatsPerBar": 4,
-                "barsPerLoop": 4,
-                "harmonyCycleBars": 8,
-                "rootNote": "C",
-                "mode": "pentatonicMinor",
             }
         )
 
@@ -327,7 +343,7 @@ def maybe_bootstrap_manifest(args: argparse.Namespace, source_root: Path) -> boo
     rendered = json.dumps(manifest, indent=2) + "\n"
     write_text(manifest_path, rendered, args.dry_run)
     print(f"{'Would write' if args.dry_run else 'Wrote'} draft manifest: {manifest_path}")
-    print("Edit the generated titles, tags, theme, and per-song metadata, then rerun without --bootstrap-manifest.")
+    print("Edit the generated titles, tags, and theme, then rerun without --bootstrap-manifest.")
     return True
 
 
@@ -494,6 +510,36 @@ def hydrate_imported_song(song_dir: Path, args: argparse.Namespace) -> None:
     hydrate_config(context, inference, dry_run=False)
 
 
+def apply_album_harmony_defaults(repo_root: Path, album_id: str) -> None:
+    analyze_script = repo_root / "scripts" / "analyze_harmony.py"
+    apply_script = repo_root / "scripts" / "apply_harmony_defaults.py"
+    album_target = f"src/content/albums/{album_id}"
+
+    analyze = subprocess.run(
+        ["python3", str(analyze_script), album_target],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    print(analyze.stdout, end="")
+    if analyze.returncode != 0:
+        if analyze.stderr:
+            print(analyze.stderr, end="")
+        raise SystemExit("Harmony analysis failed during album import.")
+
+    apply_defaults = subprocess.run(
+        ["python3", str(apply_script), "--album-id", album_id],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    print(apply_defaults.stdout, end="")
+    if apply_defaults.returncode != 0:
+        if apply_defaults.stderr:
+            print(apply_defaults.stderr, end="")
+        raise SystemExit("Applying harmony defaults failed during album import.")
+
+
 def import_album(args: argparse.Namespace) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_root = Path(args.source_dir).resolve()
@@ -558,6 +604,11 @@ def import_album(args: argparse.Namespace) -> None:
     for plan in song_plans:
         print()
         hydrate_imported_song(album_dir / "songs" / plan.slug, args)
+
+    if args.apply_harmony_defaults:
+        print()
+        print("Analyzing imported album harmony and applying defaults...")
+        apply_album_harmony_defaults(repo_root, album_id)
 
 
 def main() -> None:

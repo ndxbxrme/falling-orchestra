@@ -86,19 +86,6 @@ type ImportSongDraft = {
   trackNumber: number;
   folderName: string;
   title: string;
-  slug: string;
-  id: string;
-  difficulty: number;
-  energy: number;
-  moodTags: string;
-  recommendedWeight: number;
-  availability: string;
-  bpm: number;
-  beatsPerBar: number;
-  barsPerLoop: number;
-  harmonyCycleBars: number;
-  rootNote: RootNoteName;
-  mode: ScaleModeName;
   files: File[];
   warnings: string[];
 };
@@ -107,7 +94,6 @@ type ImportAlbumDraft = {
   sourceLabel: string;
   artistId: string;
   artistName: string;
-  albumId: string;
   title: string;
   year: number;
   description: string;
@@ -116,9 +102,21 @@ type ImportAlbumDraft = {
   tags: string;
   coverArtPath: string;
   backdropPreset: string;
+  applyHarmonyDefaults: boolean;
   extraFiles: File[];
   songs: ImportSongDraft[];
 };
+
+const KNOWN_IMPORT_TAGS = [
+  "ambient",
+  "broken",
+  "dark",
+  "driving",
+  "heavy",
+  "hypnotic",
+  "melodic",
+  "uplifting",
+] as const;
 
 const ROOT_OPTIONS = Object.keys(ROOT_NOTES) as RootNoteName[];
 const MODE_OPTIONS = Object.keys(MODE_LABELS) as ScaleModeName[];
@@ -740,17 +738,12 @@ export class AuthoringApp {
         const songDraft = this.importDraft.songs[songIndex];
         if (songDraft) {
           (songDraft as unknown as Record<string, string>)[importField] = target.value;
-          if (importField === "rootNote") {
-            songDraft.rootNote = target.value as RootNoteName;
-          }
-          if (importField === "mode") {
-            songDraft.mode = target.value as ScaleModeName;
-          }
         }
       } else {
         (this.importDraft as unknown as Record<string, string>)[importField] = target.value;
       }
       this.updateUi();
+      return;
     }
   };
 
@@ -782,11 +775,22 @@ export class AuthoringApp {
     if (importField && this.importDraft) {
       const songIndex = Number(target.dataset.songIndex ?? "-1");
       const assignDraftValue = (draft: ImportAlbumDraft | ImportSongDraft, field: string, rawValue: string): void => {
-        if (field === "year" || field === "sortOrder" || field === "difficulty" || field === "energy" || field === "bpm" || field === "beatsPerBar" || field === "barsPerLoop" || field === "harmonyCycleBars") {
-          (draft as Record<string, unknown>)[field] = Number(rawValue) || 0;
+        if (field === "applyHarmonyDefaults") {
+          (draft as Record<string, unknown>)[field] = rawValue === "true";
           return;
         }
-        if (field === "recommendedWeight") {
+        if (field === "artistPreset" && "artistId" in draft && "artistName" in draft) {
+          if (rawValue === "__custom__") {
+            return;
+          }
+          const artist = this.getKnownImportArtists().find((entry) => entry.id === rawValue);
+          if (artist) {
+            draft.artistId = artist.id;
+            draft.artistName = artist.name;
+          }
+          return;
+        }
+        if (field === "year" || field === "sortOrder") {
           (draft as Record<string, unknown>)[field] = Number(rawValue) || 0;
           return;
         }
@@ -797,26 +801,11 @@ export class AuthoringApp {
         const songDraft = this.importDraft.songs[songIndex];
         if (songDraft) {
           assignDraftValue(songDraft, importField, target.value);
-          if (importField === "title") {
-            const nextSlug = slugify(target.value || `track-${String(songDraft.trackNumber).padStart(2, "0")}`);
-            songDraft.slug = nextSlug;
-            songDraft.id = `${this.importDraft.artistId}_${nextSlug}`;
-          }
         }
       } else {
         assignDraftValue(this.importDraft, importField, target.value);
-        if (importField === "title") {
-          this.importDraft.albumId = `${this.importDraft.artistId}_${slugify(target.value || "album")}`;
-        }
-        if (importField === "artistId") {
-          this.importDraft.albumId = `${target.value}_${slugify(this.importDraft.title || "album")}`;
-          this.importDraft.songs = this.importDraft.songs.map((songDraft) => ({
-            ...songDraft,
-            id: `${target.value}_${songDraft.slug}`,
-          }));
-        }
       }
-      this.updateUi();
+      return;
     }
   };
 
@@ -919,6 +908,22 @@ export class AuthoringApp {
 
     if (action === "pick-import-folder") {
       this.importFolderInput?.click();
+      return;
+    }
+
+    if (action === "toggle-import-tag") {
+      const tag = target?.closest<HTMLElement>("[data-tag]")?.dataset.tag?.trim().toLowerCase();
+      if (!tag || !this.importDraft) {
+        return;
+      }
+      const tags = this.getImportTagsSet();
+      if (tags.has(tag)) {
+        tags.delete(tag);
+      } else {
+        tags.add(tag);
+      }
+      this.importDraft.tags = [...tags].sort((a, b) => a.localeCompare(b)).join(", ");
+      this.updateUi();
       return;
     }
 
@@ -1440,24 +1445,10 @@ export class AuthoringApp {
 
     const songs: ImportSongDraft[] = numberedFolders.map(([folderName, songFiles]) => {
       const trackNumber = Number(folderName);
-      const slug = `track-${String(trackNumber).padStart(2, "0")}`;
       return {
         trackNumber,
         folderName,
         title: `Track ${trackNumber}`,
-        slug,
-        id: `artist_${slug}`,
-        difficulty: 3,
-        energy: 3,
-        moodTags: "dark,driving",
-        recommendedWeight: 0.7,
-        availability: "hidden",
-        bpm: 120,
-        beatsPerBar: 4,
-        barsPerLoop: 4,
-        harmonyCycleBars: 8,
-        rootNote: "C",
-        mode: "pentatonicMinor",
         files: songFiles.filter((file) => file.name.toLowerCase().endsWith(".ogg")),
         warnings: parseImportedSongWarnings(songFiles),
       };
@@ -1466,12 +1457,10 @@ export class AuthoringApp {
     const selectedAlbumArtistId = this.getSelectedAlbum().artistId || "artist";
     const artistId = slugify(selectedAlbumArtistId || "artist");
     const albumTitle = sourceLabel.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim() || "New Album";
-    const albumId = `${artistId}_${slugify(albumTitle)}`;
     this.importDraft = {
       sourceLabel,
       artistId,
       artistName: artistId.replace(/-/g, " ").replace(/\b\w/g, (char: string) => char.toUpperCase()),
-      albumId,
       title: albumTitle,
       year: new Date().getFullYear(),
       description: "",
@@ -1480,6 +1469,7 @@ export class AuthoringApp {
       tags: "",
       coverArtPath: "",
       backdropPreset: "brutalist-club",
+      applyHarmonyDefaults: true,
       extraFiles,
       songs,
     };
@@ -1493,11 +1483,14 @@ export class AuthoringApp {
     if (!draft) {
       return null;
     }
+    const normalizedArtistId = slugify(draft.artistId || "artist");
+    const normalizedAlbumTitle = draft.title.trim() || "album";
+    const albumId = `${normalizedArtistId}_${slugify(normalizedAlbumTitle)}`;
     return {
-      artistId: draft.artistId,
+      artistId: normalizedArtistId,
       artistName: draft.artistName,
-      albumId: draft.albumId,
-      title: draft.title,
+      albumId,
+      title: normalizedAlbumTitle,
       year: draft.year,
       description: draft.description,
       sortOrder: draft.sortOrder,
@@ -1513,24 +1506,37 @@ export class AuthoringApp {
         backdropPreset: draft.backdropPreset.trim() || "brutalist-club",
       },
       songs: draft.songs.map((song) => ({
-        title: song.title,
-        slug: song.slug,
-        id: song.id,
+        title: song.title.trim() || `Track ${song.trackNumber}`,
+        slug: slugify(song.title.trim() || `track-${String(song.trackNumber).padStart(2, "0")}`),
+        id: `${normalizedArtistId}_${slugify(song.title.trim() || `track-${String(song.trackNumber).padStart(2, "0")}`)}`,
         trackNumber: song.trackNumber,
-        difficulty: song.difficulty,
-        energy: song.energy,
-        moodTags: song.moodTags.split(",").map((tag) => tag.trim()).filter(Boolean),
-        recommendedWeight: song.recommendedWeight,
-        availability: song.availability,
         audioDir: song.folderName,
-        bpm: song.bpm,
-        beatsPerBar: song.beatsPerBar,
-        barsPerLoop: song.barsPerLoop,
-        harmonyCycleBars: song.harmonyCycleBars,
-        rootNote: song.rootNote,
-        mode: song.mode,
       })),
     };
+  }
+
+  private getKnownImportArtists(): Array<{ id: string; name: string }> {
+    return [...MUSIC_LIBRARY.artists]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((artist) => ({ id: artist.id, name: artist.name }));
+  }
+
+  private getSelectedImportArtistId(): string {
+    if (!this.importDraft) {
+      return "__custom__";
+    }
+    const draftId = slugify(this.importDraft.artistId || "artist");
+    const match = this.getKnownImportArtists().find((artist) => artist.id === draftId);
+    return match ? match.id : "__custom__";
+  }
+
+  private getImportTagsSet(): Set<string> {
+    return new Set(
+      (this.importDraft?.tags ?? "")
+        .split(",")
+        .map((tag) => tag.trim().toLowerCase())
+        .filter(Boolean),
+    );
   }
 
   private async runImportUpload(): Promise<void> {
@@ -1552,6 +1558,7 @@ export class AuthoringApp {
     try {
       const formData = new FormData();
       formData.append("manifest", JSON.stringify(manifest));
+      formData.append("applyHarmonyDefaults", draft.applyHarmonyDefaults ? "true" : "false");
       for (const song of draft.songs) {
         for (const file of song.files) {
           formData.append("files", file, `${song.folderName}/${file.name}`);
@@ -1597,6 +1604,9 @@ export class AuthoringApp {
   private renderImportView(): string {
     const draft = this.importDraft;
     const totalWarnings = draft?.songs.reduce((count, song) => count + song.warnings.length, 0) ?? 0;
+    const knownArtists = this.getKnownImportArtists();
+    const selectedImportArtistId = this.getSelectedImportArtistId();
+    const selectedTags = this.getImportTagsSet();
     return `
       <div class="authoring-shell">
         ${this.renderAuthoringHeader("Album Import", "Turn a numbered folder of loop clips into a packaged album draft.")}
@@ -1635,9 +1645,12 @@ export class AuthoringApp {
                   ? "<p class=\"authoring-empty\">No import draft loaded.</p>"
                   : `
                     <div class="authoring-grid authoring-import-grid">
+                      <label class="authoring-label"><span>Known Artist</span><select data-import-field="artistPreset">
+                        <option value="__custom__"${selectedImportArtistId === "__custom__" ? " selected" : ""}>Custom Artist</option>
+                        ${knownArtists.map((artist) => `<option value="${escapeHtml(artist.id)}"${selectedImportArtistId === artist.id ? " selected" : ""}>${escapeHtml(artist.name)}</option>`).join("")}
+                      </select></label>
                       <label class="authoring-label"><span>Artist Id</span><input data-import-field="artistId" type="text" value="${escapeHtml(draft.artistId)}" /></label>
                       <label class="authoring-label"><span>Artist Name</span><input data-import-field="artistName" type="text" value="${escapeHtml(draft.artistName)}" /></label>
-                      <label class="authoring-label"><span>Album Id</span><input data-import-field="albumId" type="text" value="${escapeHtml(draft.albumId)}" /></label>
                       <label class="authoring-label"><span>Album Title</span><input data-import-field="title" type="text" value="${escapeHtml(draft.title)}" /></label>
                       <label class="authoring-label"><span>Year</span><input data-import-field="year" type="number" value="${draft.year}" /></label>
                       <label class="authoring-label"><span>Sort Order</span><input data-import-field="sortOrder" type="number" value="${draft.sortOrder}" /></label>
@@ -1645,10 +1658,18 @@ export class AuthoringApp {
                         ${["included", "locked", "hidden"].map((option) => `<option value="${option}"${draft.availability === option ? " selected" : ""}>${option}</option>`).join("")}
                       </select></label>
                       <label class="authoring-label"><span>Backdrop Preset</span><input data-import-field="backdropPreset" type="text" value="${escapeHtml(draft.backdropPreset)}" /></label>
+                      <label class="authoring-label authoring-label-wide"><span>Known Tags</span><div class="authoring-tag-grid">
+                        ${KNOWN_IMPORT_TAGS.map((tag) => `<button type="button" class="library-chip${selectedTags.has(tag) ? " active" : ""}" data-action="toggle-import-tag" data-tag="${tag}">${tag}</button>`).join("")}
+                      </div></label>
                       <label class="authoring-label"><span>Tags</span><input data-import-field="tags" type="text" value="${escapeHtml(draft.tags)}" placeholder="deep house, ambient house" /></label>
                       <label class="authoring-label"><span>Cover Art Path</span><input data-import-field="coverArtPath" type="text" value="${escapeHtml(draft.coverArtPath)}" placeholder="cover.webp" /></label>
+                      <label class="authoring-label"><span>Default Harmony</span><select data-import-field="applyHarmonyDefaults">
+                        <option value="true"${draft.applyHarmonyDefaults ? " selected" : ""}>Analyze + apply on import</option>
+                        <option value="false"${!draft.applyHarmonyDefaults ? " selected" : ""}>Leave at placeholder</option>
+                      </select></label>
                       <label class="authoring-label authoring-label-wide"><span>Description</span><textarea data-import-field="description" rows="4">${escapeHtml(draft.description)}</textarea></label>
                     </div>
+                    <p class="authoring-copy">Derived album id: ${escapeHtml(`${slugify(draft.artistId || "artist")}_${slugify(draft.title.trim() || "album")}`)}</p>
                   `
               }
             </section>
@@ -1663,30 +1684,11 @@ export class AuthoringApp {
                       <div class="authoring-grid-head">
                         <div>
                           <h2>${String(song.trackNumber).padStart(2, "0")} · ${escapeHtml(song.folderName)}</h2>
-                          <p>${song.files.length} loop files</p>
+                          <p>${song.files.length} loop files · ${escapeHtml(`${slugify(draft.artistId || "artist")}_${slugify(song.title.trim() || `track-${String(song.trackNumber).padStart(2, "0")}`)}`)}</p>
                         </div>
                       </div>
                       <div class="authoring-grid authoring-import-grid">
                         <label class="authoring-label"><span>Title</span><input data-import-field="title" data-song-index="${index}" type="text" value="${escapeHtml(song.title)}" /></label>
-                        <label class="authoring-label"><span>Slug</span><input data-import-field="slug" data-song-index="${index}" type="text" value="${escapeHtml(song.slug)}" /></label>
-                        <label class="authoring-label"><span>Song Id</span><input data-import-field="id" data-song-index="${index}" type="text" value="${escapeHtml(song.id)}" /></label>
-                        <label class="authoring-label"><span>Difficulty</span><input data-import-field="difficulty" data-song-index="${index}" type="number" min="1" max="5" value="${song.difficulty}" /></label>
-                        <label class="authoring-label"><span>Energy</span><input data-import-field="energy" data-song-index="${index}" type="number" min="1" max="5" value="${song.energy}" /></label>
-                        <label class="authoring-label"><span>Mood Tags</span><input data-import-field="moodTags" data-song-index="${index}" type="text" value="${escapeHtml(song.moodTags)}" /></label>
-                        <label class="authoring-label"><span>Weight</span><input data-import-field="recommendedWeight" data-song-index="${index}" type="number" step="0.1" value="${song.recommendedWeight}" /></label>
-                        <label class="authoring-label"><span>Availability</span><select data-import-field="availability" data-song-index="${index}">
-                          ${["included", "locked", "hidden"].map((option) => `<option value="${option}"${song.availability === option ? " selected" : ""}>${option}</option>`).join("")}
-                        </select></label>
-                        <label class="authoring-label"><span>BPM</span><input data-import-field="bpm" data-song-index="${index}" type="number" value="${song.bpm}" /></label>
-                        <label class="authoring-label"><span>Beats/Bar</span><input data-import-field="beatsPerBar" data-song-index="${index}" type="number" value="${song.beatsPerBar}" /></label>
-                        <label class="authoring-label"><span>Bars/Loop</span><input data-import-field="barsPerLoop" data-song-index="${index}" type="number" value="${song.barsPerLoop}" /></label>
-                        <label class="authoring-label"><span>Harmony Cycle</span><input data-import-field="harmonyCycleBars" data-song-index="${index}" type="number" value="${song.harmonyCycleBars}" /></label>
-                        <label class="authoring-label"><span>Root Note</span><select data-import-field="rootNote" data-song-index="${index}">
-                          ${ROOT_OPTIONS.map((root) => `<option value="${root}"${song.rootNote === root ? " selected" : ""}>${root}</option>`).join("")}
-                        </select></label>
-                        <label class="authoring-label"><span>Mode</span><select data-import-field="mode" data-song-index="${index}">
-                          ${MODE_OPTIONS.map((mode) => `<option value="${mode}"${song.mode === mode ? " selected" : ""}>${MODE_LABELS[mode]}</option>`).join("")}
-                        </select></label>
                       </div>
                     </div>
                   `).join("")

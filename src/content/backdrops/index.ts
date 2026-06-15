@@ -5,6 +5,7 @@ export * from "./registry";
 export * from "./presets/afterburner-slipstream";
 export * from "./presets/brutalist-club";
 export * from "./presets/gatecrasher-reactor";
+export * from "./presets/ibiza-sun";
 export * from "./presets/rain-window";
 export * from "./presets/radar-shrine";
 export * from "./presets/scaffold-test";

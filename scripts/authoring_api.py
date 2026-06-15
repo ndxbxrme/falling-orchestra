@@ -197,6 +197,8 @@ class AuthoringApiHandler(BaseHTTPRequestHandler):
             command.append("--dry-run")
         if payload.get("noHydrate"):
             command.append("--no-hydrate")
+        if payload.get("applyHarmonyDefaults"):
+            command.append("--apply-harmony-defaults")
 
         for arg_name, flag in (
             ("artistId", "--artist-id"),
@@ -248,6 +250,10 @@ class AuthoringApiHandler(BaseHTTPRequestHandler):
         if not isinstance(manifest_raw, str):
             raise ValueError("Manifest must be JSON text")
         manifest = json.loads(manifest_raw)
+        apply_harmony_defaults = False
+        if "applyHarmonyDefaults" in form:
+            raw_apply = form["applyHarmonyDefaults"].value
+            apply_harmony_defaults = str(raw_apply).lower() in {"1", "true", "yes", "on"}
 
         repo_root = Path(__file__).resolve().parents[1]
         staging_root = repo_root / "tmp" / "import-staging"
@@ -276,6 +282,8 @@ class AuthoringApiHandler(BaseHTTPRequestHandler):
 
         script_path = repo_root / "scripts" / "import_album_package.py"
         command = ["python3", str(script_path), "--source-dir", str(target_root)]
+        if apply_harmony_defaults:
+            command.append("--apply-harmony-defaults")
         result = subprocess.run(
             command,
             cwd=repo_root,

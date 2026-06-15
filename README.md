@@ -279,6 +279,7 @@ Useful flags:
 
 - `--dry-run`: print the planned import without writing files
 - `--no-hydrate`: scaffold and copy audio, but skip groove hydration
+- `--apply-harmony-defaults`: after hydration, run the harmony analyzer on the imported album and set each song to its dominant default root/mode
 
 `album.json` shape:
 
@@ -307,18 +308,7 @@ Useful flags:
       "slug": "track-01",
       "id": "subterranean_track-01",
       "trackNumber": 1,
-      "difficulty": 3,
-      "energy": 3,
-      "moodTags": ["dark", "driving"],
-      "recommendedWeight": 0.7,
-      "availability": "hidden",
-      "audioDir": "1",
-      "bpm": 120,
-      "beatsPerBar": 4,
-      "barsPerLoop": 4,
-      "harmonyCycleBars": 8,
-      "rootNote": "C",
-      "mode": "pentatonicMinor"
+      "audioDir": "1"
     }
   ]
 }
@@ -328,6 +318,15 @@ Asset handling rules:
 
 - any string value in `coverArt`, `theme.backdropParams`, or `song.backdropParams` that points at a real file relative to the source folder is copied into the packaged album/song and turned into a TypeScript asset import automatically
 - `audioDir` should point to the folder containing that song’s `.ogg` loop files
+
+Import defaults:
+
+- per-song title is the only field you generally need to edit up front
+- BPM, loop bars, and groove structure are inferred by hydration from the clip durations
+- song `availability` inherits the album availability unless explicitly overridden
+- song `moodTags` inherit album tags if present, otherwise they fall back to a simple default
+- song `difficulty` is inferred from the number of groove groups found in the clip set
+- `energy`, `recommendedWeight`, and detailed harmony structure can be refined later
 
 ### Local Audio Metadata POC
 
