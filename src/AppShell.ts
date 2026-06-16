@@ -28,6 +28,12 @@ import type { GameCompletionStats } from "./game/types";
 import { SongPreviewPlayer } from "./SongPreviewPlayer";
 import type { Album, LibraryRoute, LibraryState, SongEntry, SongMoodTag } from "./content/types";
 
+declare global {
+  interface Window {
+    gtag?: (...args: unknown[]) => void;
+  }
+}
+
 const escapeHtml = (value: string): string =>
   value
     .replace(/&/g, "&amp;")
@@ -374,9 +380,11 @@ export class AppShell {
     const url = playback ? this.buildUrlForPlayback(playback.songId) : this.buildUrlForRoute(this.route);
     if (replace) {
       window.history.replaceState(state, "", url);
+      this.trackPageView(url);
       return;
     }
     window.history.pushState(state, "", url);
+    this.trackPageView(url);
   }
 
   private async restorePlaybackFromLocation(): Promise<void> {
@@ -408,6 +416,7 @@ export class AppShell {
         historyState.playback.queueIndex,
         false,
       );
+      this.trackPageView(this.buildUrlForPlayback(historyState.playback.songId));
       return;
     }
 
@@ -417,6 +426,20 @@ export class AppShell {
     this.session = null;
     this.scrollLibraryToTop();
     this.render();
+    this.trackPageView(this.buildUrlForRoute(this.route));
+  }
+
+  private trackPageView(url: string): void {
+    if (typeof window.gtag !== "function") {
+      return;
+    }
+    const pageLocation = new URL(url, window.location.origin).toString();
+    const pagePath = new URL(pageLocation).pathname;
+    window.gtag("event", "page_view", {
+      page_title: document.title,
+      page_location: pageLocation,
+      page_path: pagePath,
+    });
   }
 
   private scrollLibraryToTop(): void {
